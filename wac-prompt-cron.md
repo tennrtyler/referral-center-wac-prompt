@@ -3,20 +3,25 @@
 > Customer-agnostic by design. Everything specific to your customer — org,
 > credentials, WIP mappings, date fields, modules, stages, how to read status
 > out of the EMR, and how the CRON should loop — is in the **Linear ticket
-> body** (the filled ESE input). The prompt files are attachments on that
-> ticket.
+> body** (the filled ESE input). The prompt files are attachments on that ticket.
 >
 > **Read that ticket before doing anything.** If a fact is blank, ambiguous, or
 > contradicts the repo, **stop and ask**. Do not guess.
+>
+> **Get the attachments first.** The prompt files are `linear-embed
+> node-type="file"` attachments on the issue description. `get_issue` does not
+> reliably return inline embeds, and an empty `attachments` array does **not**
+> mean there are none — the files can be present in the description body and
+> stripped from the response. Download every attached file before you start. If
+> the ticket names a file you cannot retrieve, **ask**; do not proceed without it.
 
 ---
 
 ## Your role
 
-You are implementing the **Referral Center CRON** for one Tennr org in the
-`tennr-workflows` Workflows-as-Code repo (`~/dev/tennr-workflows`).
-
-This prompt covers **one build and a gated backfill**:
+Implement the **Referral Center CRON** for one Tennr org in the
+`tennr-workflows` Workflows-as-Code repo (`~/dev/tennr-workflows`) — one build
+plus a gated backfill:
 
 1. A **CRON workflow** that syncs order Stage and Status from the customer's EHR
    into TOM for **Scheduled** and **Completed**.
@@ -24,19 +29,34 @@ This prompt covers **one build and a gated backfill**:
 3. A stale-order backfill — **only if approved**.
 
 Missing Info / Rejected writes in E&B and Qualifications are a **separate
-prompt** (`wac-prompt-missing-info.md`). Do not do that work here.
+prompt** (`wac-prompt-missing-info.md`). Do not **implement** that work here —
+but if the E&B or Qual status mapping conflicts with your terminal semantics,
+**report it**. (The common case: a Qual worker that sets `Completed` when
+qualification passes. See Phase 0.)
 
-**The single most important rule: never guess a customer-specific fact.** WIP
-state names, stage names, EHR field names, module versions, credential names,
-order-type names, and looping strategy all come from the Linear ticket body. A
-wrong WIP state silently syncs nothing; a wrong stage name silently fails to
-match. Neither errors loudly.
+**Never guess a customer-specific fact.** WIP state names, stage names, EHR
+field names, module versions, credential names, order-type names, and looping
+strategy all come from the Linear ticket body. A wrong WIP state silently syncs
+nothing; a wrong stage name silently fails to match. Neither errors loudly.
 
 ---
 
 ## Safety rules (non-negotiable)
 
-**1. Test on drafts only. Never execute a live workflow version.**
+**1. The repo is not authoritative for existing workers — pull prod first.**
+
+A checked-in `.ts` can be months behind production. Before reading any existing
+workflow to learn how the org behaves:
+
+```bash
+tennr pull prod --assistant-id <id> --team-id <teamId> --out <path> --slug <slug>
+```
+
+Never infer live behaviour from a repo file you did not just pull. `pull` drops
+the display name and slug, so pass `--slug`. Applies to the reference workers in
+`reference-index.md` too — pull before copying.
+
+**2. Test on drafts only. Never execute a live workflow version.**
 
 The CLI always talks to prod (`api.tennr.com`) — "dev" vs "prod" is *which
 version executes*, not which host. Before any `tennr run start`, confirm the
@@ -57,19 +77,22 @@ tennr run start ./<workflow>.ts --branch referral-center --team-id <teamId>
   state**; a concurrent `tennr` command overwrites it. Never trust
   `tennr branch current` to persist — always name the target explicitly with
   `--branch` and `--team-id` on every push/run/check.
-- Any cascade you drive must spawn children with **`useDraftVersion: true`** so
-  the whole chain stays on drafts.
+- To exercise a cascade on drafts, set **`useDraftVersion: true`** on the spawn
+  *and* remove the testing-only stop, then revert both before pushing. An
+  `isTestingOnly` `WORKFLOW_END` before the spawn is the stronger guarantee —
+  test runs then never spawn at all. Never leave `useDraftVersion` set on a
+  pushed version: it permanently points production at the child's draft.
 - If you cannot confirm a run targets a draft, **do not run it**. Stop and ask.
 
-**2. No git remote writes.** No `git push`, no PRs, no branch pushes, no
+**3. No git remote writes.** No `git push`, no PRs, no branch pushes, no
 `gh` commands. Leave local edits in the working tree.
 
-**3. "Done" requires real run IDs.** `pnpm typecheck` and `tennr check` are
+**4. "Done" requires real run IDs.** `pnpm typecheck` and `tennr check` are
 necessary but never sufficient. A build is complete only when you have actual
 `tennr run` IDs whose **step results you read** and which show the expected
 stage/status/note on the expected order. Report the IDs.
 
-**4. Never bind a resource that doesn't exist.** `importCredential`,
+**5. Never bind a resource that doesn't exist.** `importCredential`,
 `bindSorTable`, `importModule`, and `bindTeamGroup` resolve names that must
 already exist in the target org. Confirm with `tennr team list …`,
 `tennr team describe module`, and `tennr schema ehr` before writing the binding.
@@ -78,7 +101,7 @@ already exist in the target org. Confirm with `tennr team list …`,
 
 ## The target pipeline shape
 
-This is what a correct Referral Center pipeline looks like. Build toward it.
+Build toward this:
 
 1. Starts at **Referral Received** (the default stage) when the order is created.
 2. Intermediate stages carry status **`On Track`**, **`Missing Info`**, or
@@ -99,10 +122,15 @@ Qualifications → Delivery Scheduled →
 Delivery Completed
 ```
 
-**If the org has no stages configured yet**, that's a fast add, not a blocker:
-`Referral Received → Scheduled → Completed` is a legitimate minimum (drop
-Scheduled if #6 says to ignore it). Use the stage names from ticket **#10**,
-character for character.
+**Before writing any sweep logic, check #10 for a terminal stage.** The common
+failure is an org with several stages configured and no terminal one — every
+stage is work-in-progress, so a completed order has nowhere to land. That blocks
+the whole sync: `updateTennrObject` hard-errors `Order stage not found` on an
+unconfigured literal, so every completion fails. Adding a stage is a fast
+app-side change — ask for it and get the exact string back before you build.
+Same if the org has no stages at all: `Referral Received → Scheduled →
+Completed` is a legitimate minimum (drop Scheduled if #6 says to ignore it). Use
+the stage names from **#10**, character for character.
 
 ---
 
@@ -145,16 +173,16 @@ b.updateTennrObject(
 
 The Order entity has real date fields the deployment plan doesn't mention:
 
-- **`dateFulfilled`** (DATE) — "the date the order was fulfilled. Set when the
-  requested device, medication, or service has been delivered to the patient."
+- **`dateFulfilled`** (DATE) — set when the requested device, medication, or
+  service has been delivered to the patient.
 - **`authoredOn`** (DATE) — the date the referring provider authored the order.
-  When set, it displays in Patient Hub / Referral Pipeline instead of the
+  When set, Patient Hub / Referral Pipeline show it instead of the
   system-generated received timestamp.
 
 Write `dateFulfilled` when you set status to `Completed` and you have a real
-delivery date (ticket **#9**). **Also** write an order note, because the note is
-the human-legible surface the referring provider actually reads. Use `parseDate`
-to convert an EHR date string before writing it to a DATE field:
+delivery date (ticket **#9**). **Also** write an order note — the note is the
+human-legible surface the referring provider actually reads. Use `parseDate` to
+convert an EHR date string before writing it to a DATE field:
 
 ```ts
 b.parseDate({ inputVariableName: "completed_date_raw" },
@@ -164,6 +192,45 @@ b.parseDate({ inputVariableName: "completed_date_raw" },
 Other useful Order fields: `orderType` (references a team-configured order type
 from a service line), `displayName` (overrides the order title in the UI),
 `tags` (free-form list, for filtering/segmentation), `isResupply`.
+
+### Referring provider (for the #12 provider backfill)
+
+`referringPractitioner` is an ordinary `fieldPath` whose **value is an entity
+selector object**, not an `entityReferences` slot. `referringPractitionerNpi` is
+a plain string alongside it:
+
+```ts
+b.updateTennrObject(
+  {
+    updates: [
+      { value: { externalId: "{{provider_lookup.id}}" }, fieldPath: "referringPractitioner" },
+      { value: '{{provider_lookup.npi,""}}',             fieldPath: "referringPractitionerNpi" },
+    ],
+    variableType: "ORDER",
+    variableReference: "order_entity",
+  },
+  { key: "<uuid>", name: "Set Order Referring Practitioner" },
+);
+```
+
+Two traps:
+
+- **`externalId` is the practitioner's external id — usually a different column
+  from the one you matched on.** If you resolved the provider through a lookup
+  table, the match key (an EHR contact number) and the external id (often the
+  table's `id` column) are different values. Writing the match key resolves
+  nothing, silently.
+- Only write it when the order has none — read `TEAM_PRACTITIONER` by
+  `ORDER_REFERENCE` first and skip if it returns one. Never overwrite a provider
+  a human set.
+
+`providerLinking` is **not** an alternative: it is document-driven and
+Validate-backed, so it cannot run headless in a CRON.
+
+**When a TOM field looks undiscoverable from the SDK, it usually isn't.** The
+SDK does not enumerate ORDER field paths — grep a **prod-pulled** workflow in
+the same org that already writes it. The editor can set the field, so some
+shipped workflow does too.
 
 ### Order notes (append-only — safe to create without reading first)
 
@@ -192,6 +259,13 @@ with `status: "Rejected"`. **Never set status `Rejected` without a reason.**
 
 Most CRON builds are Scheduled + Complete only. Do **not** invent a rejection
 path the ticket did not ask for.
+
+**Create the entity first, then set the status — in the same `tryCatch`.** If
+the entity write fails, the status is never changed and the order keeps its
+previous state; you never strand one as `Rejected` with no reason. Two separate
+`tryCatch` blocks defeat this: the first swallows the entity error and the
+status is written anyway. This is the opposite of the note/date ordering below,
+and deliberately so — a note is decoration, a rejection reason is required.
 
 ```ts
 b.createTennrObject(
@@ -298,14 +372,18 @@ w.root(WorkflowBlockType.EMAIL, (b) => {
 
 **Ticket #12 is the source of truth** for how to loop. Also use #5
 (credentials), #11 (how to read status), and any API docs attached to the
-ticket. **Read the named reference file before writing any code** — copy its
-shape, not its customer data. Full detail in `reference-index.md`.
+ticket. **Pull and read the named reference build before writing any code**, and
+copy its *shape*, never its customer data — every reference is a different org,
+and `reference-index.md` lists per-pattern what to copy and what not to. When
+you cite a reference in your report, say which part you took and why it
+generalizes.
 
 | If #12 says | Build | Read first |
 | - | - | - |
 | Credential-constrained EHR, per-WIP-state fetch is possible, thousands of open orders | **A — dispatcher + batch worker.** Loop the WIP lists, one EHR call per WIP state, chunk the resulting order IDs into batches of 50, spawn a worker per batch. O(1) EHR calls, O(n) TOM ops. | `orgs/williams-brothers/workflows/invisible/cron-wip-stage-sync/` + `.../wip-stage-sync-worker/` |
 | Customer has a report, DB, or SOR table that's better than the EHR modules | **B — report/table-driven dispatcher + branch worker.** Query the table, normalize + chunk in a `codeBlock`, spawn a branch worker per batch that maps each row to stage/status/notes. | `orgs/viemed-sleep/workflows/invisible/tom-cron-branch/` (cleanest mapping) and `orgs/flomed/workflows/invisible/patient-pipeline-status-batch/` |
 | Low order volume, cheap EHR API, no credential pressure — or #12 says loop TOM orders and ping the EMR per order | **C — single workflow.** `readTomEntity` by `ORDER_STATUS`, `forEach` the orders, branch on `current_order.stage`, read the EHR per order. Simplest; start here if unsure. | `orgs/livwell/workflows/in-dev/treatments-scheduled-and-received-sync-cron/` |
+| The EHR's only order endpoint is keyed by **patient**, not by order or WIP state — no bulk "what changed" call exists | **D — TOM-first, patient-keyed.** `ORDER_STATUS` sweep, resolve each order's patient, group **by patient**, chunk, spawn a worker that makes one API call per patient and reconciles the response against that patient's open order ids. | `orgs/tactile/workflows/cron-referral-center-order-sync/` + `.../referral-center-order-sync-worker/` |
 
 If #12 is blank, ambiguous, or you cannot tell whether bulk-fetch would miss
 archived/completed/voided orders, **stop and ask**. Do not pick a pattern by
@@ -319,10 +397,10 @@ and leave a gap the ESE did not fill.
 **Brightree — PAPI (credential-constrained).** Looping every TOM patient and
 checking Brightree is too costly. Two options:
 
-- **Sales Orders Worklist — not recommended.** It does **not** include orders
-  marked "Completed" in Brightree. If the customer marks orders that way (most
-  do), this misses a large share of exactly the orders you're trying to update.
-  Only use it if you've confirmed that doesn't apply.
+- **Sales Orders Worklist — not recommended.** It excludes orders marked
+  "Completed" in Brightree, so if the customer marks orders that way (most do)
+  it misses exactly the orders you are trying to update. Only use it if you have
+  confirmed that doesn't apply.
 - **Ad-Hoc Audit Report — recommended.** One call gets yesterday's WIP
   transitions; then O(n) TOM operations. Build it in Brightree:
   Ad-Hoc Reports → "Design A New Report" → "Audit Trail (Last 12 Months)" →
@@ -341,15 +419,15 @@ costs the customer real money at volume. Still default to pulling only WIP
 states that changed since the last sync. **Verify the API response includes
 orders in a Completed status** — if it doesn't, fall back to the ad-hoc report.
 
-Note: for reading order details, `ehr: "Brightree"` with `type: "GET_ORDER"`
-returns the **full** order object including `scheduledDate` / `scheduledTime` /
+For reading order details, `ehr: "Brightree"` with `type: "GET_ORDER"` returns
+the **full** order object including `scheduledDate` / `scheduledTime` /
 `actualDate` / `actualTime`. The `"Brightree V2"` variant returns a minimal
 object **without** those Order-tab fields.
 
-**WeInfuse.** Prefer checking each TOM order against WeInfuse over pulling all
-flow tasks — stale flowtasks confuse the latter, and TOM orders can slip through
-and never get updated. Handle **archived orders** explicitly, or orders get
-stuck permanently `On Track`:
+**WeInfuse.** Check each TOM order against WeInfuse rather than pulling all flow
+tasks — stale flowtasks confuse the latter, and TOM orders slip through and
+never get updated. Handle **archived orders** explicitly, or they stick
+permanently at `On Track`:
 
 - Archived with treatment complete → `Completed` + the matching appointment date.
 - Archived with a clear rejection reason (OON, patient went elsewhere) →
@@ -365,6 +443,28 @@ as a note.
 ## Build rules and gotchas
 
 Every one of these is a real failure observed in shipped code. Follow them.
+
+**Never compare an EHR status string literally — normalize it.** Verbatim
+strings from a customer routinely contain a Unicode en dash (`\u2013`), a
+non-breaking space, or doubled spacing. `status === "Shipped – Approved"`
+compiles, runs, throws nothing, and matches **zero** rows forever — the worst
+failure mode a sync has, because it looks like "nothing shipped yet". Fold dash
+variants to ASCII, collapse whitespace, lowercase, then compare:
+
+```ts
+function normalizeStatus(v: unknown): string {
+  return String(v ?? "")
+    .replace(/[\u2010-\u2015\u2212\uFE58\uFE63\uFF0D]/g, "-")
+    .replace(/\s+/g, " ").trim().toLowerCase();
+}
+```
+
+Keep the *normalization*, not the literal, as the contract. Applies to any
+verbatim string from **#6** / **#7**.
+
+**Absence is not completion.** An order the EHR did not return means "we learned
+nothing", never "it finished". Count those separately and write nothing. Only an
+explicit terminal status completes an order.
 
 **Carry the target stage explicitly on each item.** Emit `{ id, stage }` per
 order, where `stage` is set by *which bucket produced it* (Scheduled vs
@@ -394,7 +494,9 @@ rejects. Pass it through a `formatText` first to get a clean STRING.
 per-item `tryCatch` *inside* the loop so one bad order ID doesn't sink the whole
 batch. Do the core stage/status update **first**, then wrap best-effort extras
 (the date fetch, the note) in their own nested `tryCatch` so a failure there
-can't undo the update that matters.
+can't undo the update that matters. This ordering applies to **optional
+decoration only**. A required entity — `tom.rejectionInfo`, `tom.missingInfo` —
+goes *before* the status write and shares its `tryCatch`; see "Rejection Info".
 
 **Isolate each EHR fetch in a `tryCatch`.** An invalid or renamed WIP state is
 rejected by the EHR outright; without isolation it aborts the entire run instead
@@ -402,11 +504,11 @@ of skipping one WIP state.
 
 **Credentials: minimum scope, and beware the pause point.** Keep only the steps
 that need credentials inside `withCredential`, and put login in
-`retryable({ retries: 5 })`. Critically: **an inline credential block is a
-pause/re-enqueue point that defeats a concurrency-of-1 setting.** This produced
-108+ duplicate cards in production, twice, at the same customer. If the sync
-needs a true single-run-at-a-time guarantee, use worker-level credential
-configuration instead of an inline block.
+`retryable({ retries: 5 })`. **An inline credential block is a pause/re-enqueue
+point that defeats a concurrency-of-1 setting** — this produced 108+ duplicate
+cards in production, twice, at the same customer. If the sync needs a true
+single-run-at-a-time guarantee, use worker-level credential configuration
+instead.
 
 **Chunk and cap fan-out.** 50–300 items per batch. Never spawn per-order runs
 unbounded — every documented concurrency incident traces to unbounded fan-out.
@@ -437,6 +539,18 @@ from the output entirely, not written as `""`. The failure surfaces later, at
 whatever consumes the JSON. Default a value with `{{var,"fallback"}}` rather
 than assuming it passes through.
 
+**Verify every push actually landed.** `tennr push` can fail with a server error
+(e.g. `canceling statement due to statement timeout`) while printing enough
+output to look successful. Confirm with
+`tennr check <file> --branch <slug> --team-id <id> --refresh-baseline` and
+require `documents: equal` before you run anything. Without `--refresh-baseline`
+you compare against a stale pinned baseline, not the branch.
+
+**Question headers you inherit.** When copying an integration call from another
+worker, verify each header is actually required. Auth fragments get cargo-culted
+between workers — a bearer minted for one system routinely ends up on calls to a
+different one that never needed it. Test by removing it.
+
 ---
 
 ## Phases
@@ -445,26 +559,39 @@ Work them in order. Report at each boundary; don't batch up surprises.
 
 ### Phase 0 — Verify the input before building
 
-Read the **Linear ticket body** in full (that is the ESE input). Reference the
-`[CRON] WIP Stage Sync` (`6a554b8389b7cfba3b8d5b7f`) workflow in Williams
-Brothers as an example.
+Read the **Linear ticket body** in full (that is the ESE input). Pick your
+reference build from `reference-index.md` and pull it before reading it.
 
-1. Restate the Scheduled and Complete WIP mappings (**#6**, **#7**), and the
-   date fields (**#8**, **#9**), back to the ESE for confirmation. These are the
-   answers everything else rests on. If #6 / #8 say there is no Scheduled
-   concept, confirm you will skip Scheduled entirely.
+1. Restate the Scheduled and Complete WIP mappings (**#6**, **#7**) and the
+   date fields (**#8**, **#9**) back to the ESE for confirmation — everything
+   else rests on these. If **#6** says there is no Scheduled concept, confirm
+   you will skip Scheduled entirely.
 2. **Stop and escalate** if the mapping is conditional or varying (by SKU,
    several WIP states, edge cases). Do not guess a rule.
 3. Confirm every stage name in **#10** exists in Referral Pipeline settings,
    character for character. Stages marked `(scheduled)` and `(completed)` are
-   the ones this CRON writes.
-4. Confirm the credential (**#5**), how status is read (**#11**), and any SOR
+   the ones this CRON writes. **If #10 has no terminal stage, stop and get one
+   added** — see "The target pipeline shape".
+4. **Audit who else writes order status.** Grep the org's *prod-pulled* workers
+   for `fieldPath: "status"` and `tom.order({ status })`. If any worker sets
+   `Completed` before the terminal event — a Qual worker doing it on a passing
+   decision is the usual case — then:
+   - your sweep **must** include `Completed`, or those orders are invisible to
+     the sync and can never receive a date, note, or terminal stage; and
+   - you **must** gate re-processing on `stage`, not `status`, so a daily run
+     skips orders already at the terminal stage instead of rewriting them and
+     duplicating notes.
+
+   Report the conflicting worker. Fixing it belongs to
+   `wac-prompt-missing-info.md`; do not silently work around it, and do not edit
+   that worker from this prompt.
+5. Confirm the credential (**#5**), how status is read (**#11**), and any SOR
    table or attached API docs resolve in the target org: `tennr team list …`,
    `tennr team describe module`, `tennr schema ehr`.
-5. Restate the looping plan from **#12** — per-order vs bulk, what might be
+6. Restate the looping plan from **#12** — per-order vs bulk, what might be
    missed, volume, cadence, and any provider backfill. If #12 is thin, stop
    and ask before picking an architecture.
-6. Create the draft branch and add the workflows (see Safety rule 1). Team ID
+7. Create the draft branch and add the workflows (see Safety rule 2). Team ID
    comes from the workflow `.ts` metadata, not the ticket.
 
 ### Phase 1 — CRON sync (the main build)
@@ -481,11 +608,16 @@ Build per #12 and the selected pattern. Requirements:
   either way. Scheduled dates from **#8** go on the note (and only on a date
   field if the ticket says so).
 - If — and only if — the ticket noted rejected/cancelled/archived EHR states,
-  map them to `Rejected` + a `tom.rejectionInfo` reason. Most builds are
-  Scheduled + Complete only; don't invent a rejection path that wasn't asked for.
-  If you believe one is needed and the ticket is silent, ask.
+  map them to `Rejected` + a `tom.rejectionInfo` reason. If you believe one is
+  needed and the ticket is silent, ask.
 - If **#12** specified any backfill (e.g. provider populated in the EMR later),
-  follow those instructions when you pull order info.
+  follow those instructions when you pull order info. Only fill a field that is
+  currently empty; never overwrite one already set.
+- **Idempotent by construction.** This runs daily against the same orders, so a
+  second run must be a no-op: skip orders already at the terminal stage before
+  they cost an EHR call. Gate on `stage`, not `status` — if Phase 0 found a
+  worker that sets `Completed` early, status alone cannot tell "done" from
+  "qualified".
 
 **Proof required:** real run IDs showing a Completed transition (and a
 Scheduled transition if #6 applies), with notes and dates present. Ask the ESE
@@ -510,6 +642,12 @@ by eyeballing the app. Report pass/fail per line.
 - [ ] Bulk fetch (if used) cannot miss archived/completed/voided orders, per
   **#12**. No 7-month-old order sitting `On Track` in Referral Received →
   feeds Phase 3.
+- [ ] **Re-running the sync immediately is a no-op** on the orders it just
+  completed — no second write, no duplicate note. Prove it with a second run ID,
+  not by reasoning.
+- [ ] Any EHR state that is terminal-but-not-complete (returned, cancelled,
+  voided) has an agreed destination. If the ticket is silent, these sit open
+  forever — surface the count and ask; do not invent a rule.
 
 Anything failing goes to Ben Howe, not into a silent workaround.
 

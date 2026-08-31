@@ -1,14 +1,19 @@
-Use the baseline WAC prompt to implement referral center for {{org}}.
+Implement Referral Center for {{org}} using the WAC prompts below.
 
-Workflows as Code (WAC) prompts: {{3 file references here:
+Run them in this order, completing each before starting the next:
 
-- wac-prompt-missing-info.md
-- wac-prompt-cron.md
-- reference-index.md }}
+1. wac-prompt-cron.md — the EHR → TOM Scheduled/Completed sync. Build this first: it is what eventually completes an
+   order.
+2. wac-prompt-missing-info.md — Missing Info / Rejected writes into the existing E&B and Qualifications workers. This
+   demotes a passing Qual decision to On Track, which is only safe once the CRON above exists to complete it.
+
+reference-index.md is a shared reference read by both, not a prompt to run.
+
+{{attach all three files here}}
 
 Referral Center - ESE Input
 
-Fill in the 12 answers below, then paste this into WAC after wac-prompt.md.
+Fill in the 12 answers below, then pass this ticket into WAC and tell it to go to town.
 
 Answer every one (write none or unknown rather than leaving a line empty).
 
@@ -70,8 +75,6 @@ There is usually a date recorded when the patient gets their care. Put where to 
 think the timestamp when the status is updated will be sufficient, that works too (e.g. actualDate + actualTime)
 
 →
-
-"shipDate": "2024-03-20 13:15:17.0"
 
 10. Referral Pipeline stages, exactly as configured in the app
 
