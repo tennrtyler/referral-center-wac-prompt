@@ -11,15 +11,11 @@ This ticket attaches three markdown files as Linear file embeds
 3. If you cannot find any of them, **stop and prompt the user**. Do not proceed
    from ticket-body text alone.
 
-**Run both prompts, in this order, against this ticket, completing each
-before starting the next.**
-1. `wac-prompt-cron.md` — the EHR → TOM Scheduled / Completed sync. Build this
-   first: it is what eventually completes an order.
+**Run both prompts, in this order, against this ticket.**
+1. `wac-prompt-cron.md` — Scheduled / Completed CRON.
 2. `wac-prompt-missing-info.md` — insert Missing Info / Rejected / On Track
    writes into the Qual worker named in **#4** (and E&B if **#2** is yes).
-   **Naming the Qual worker is an instruction to edit it.** This demotes a
-   passing Qual decision to On Track, which is only safe once the CRON above
-   exists to complete it.
+   **Naming the Qual worker is an instruction to edit it.**
 
 `reference-index.md` is a shared reference read by both, not a prompt to run.
 

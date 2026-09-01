@@ -298,8 +298,7 @@ existing workers" in `reference-index.md` before reading them, and copy their
 org they came from.
 
 1. Restate whether E&B is live (**#2**), whether Qualifications is live
-   (**#3**), and which workers you will edit (**#4** — name **and**
-   assistantId). If #4 lists a Qual worker, Phase 2 is **mandatory**.
+   (**#3**), and which workers you will edit (**#4**).
 2. If Qualifications is **not** live, missing info may look different —
    **check with Ben Howe** before building. Do not invent a Qual-shaped write
    path.
@@ -343,11 +342,7 @@ orders if the ticket did not name them.
 
 ### Phase 2 — Qualifications writes
 
-**This phase is mandatory if #4 lists a Qual worker.** If you finish this
-prompt without editing that worker, you are not done — say so explicitly.
-
-In the existing Qualifications worker named in **#4** (prod-pulled,
-`--assistant-id` from #4):
+In the existing Qualifications worker named in **#4**:
 
 - If the worker does not update stage yet and **#10** marks a `(qual)` stage,
   update the stage to that name, near the beginning of the worker and before any
@@ -373,7 +368,6 @@ worker does not decide.
 
 **Proof required:** real run IDs showing Missing Info and Rejected from Qual,
 with externally legible messages/reasons, and the control order unchanged.
-Report the file path you edited.
 
 ### Phase 3 — Provide-button worker (gated on #13)
 

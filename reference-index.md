@@ -32,7 +32,6 @@ per-WIP-state fetching is possible, thousands of open orders.
 | - | - |
 | `orgs/williams-brothers/workflows/invisible/cron-wip-stage-sync/cron-wip-stage-sync.ts` | Dispatcher: two WIP buckets → per-WIP EHR fetch → accumulate → chunk to 50 → spawn a worker per batch. assistantId `6a554b8389b7cfba3b8d5b7f`, slug `williams-brothers`. |
 | `orgs/williams-brothers/workflows/invisible/wip-stage-sync-worker/wip-stage-sync-worker.ts` | Worker: parse batch → per order, resolve TOM order → set stage+status → best-effort date note. assistantId `6a554b748a58b9cb80d4ccd0`. |
-| `orgs/williams-brothers/workflows/invisible/wip-stage-sync-audit/wip-stage-sync-audit.ts` | Report-only TOM/EMR drift audit. assistantId `6a621cbf3fc6676a7d39e1d3`. Only if the ticket asks for a QA audit worker. |
 
 **Copy this:**
 - The two explicit `createTextList` buckets (`scheduled_wips`, `complete_wips`)
