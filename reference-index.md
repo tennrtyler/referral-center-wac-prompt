@@ -30,8 +30,8 @@ per-WIP-state fetching is possible, thousands of open orders.
 
 | File | Role |
 | - | - |
-| `orgs/williams-brothers/workflows/invisible/cron-wip-stage-sync/cron-wip-stage-sync.ts` | Dispatcher: two WIP buckets → per-WIP EHR fetch → accumulate → chunk to 50 → spawn a worker per batch |
-| `orgs/williams-brothers/workflows/invisible/wip-stage-sync-worker/wip-stage-sync-worker.ts` | Worker: parse batch → per order, resolve TOM order → set stage+status → best-effort date note |
+| `orgs/williams-brothers/workflows/invisible/cron-wip-stage-sync/cron-wip-stage-sync.ts` | Dispatcher: two WIP buckets → per-WIP EHR fetch → accumulate → chunk to 50 → spawn a worker per batch. assistantId `6a554b8389b7cfba3b8d5b7f`, slug `williams-brothers`. |
+| `orgs/williams-brothers/workflows/invisible/wip-stage-sync-worker/wip-stage-sync-worker.ts` | Worker: parse batch → per order, resolve TOM order → set stage+status → best-effort date note. assistantId `6a554b748a58b9cb80d4ccd0`. |
 
 **Copy this:**
 - The two explicit `createTextList` buckets (`scheduled_wips`, `complete_wips`)
@@ -146,22 +146,32 @@ columns, the `"Order Completed"` stage name.
 
 ---
 
-## Missing Info worker
+## Provide-button worker (default Missing Info worker)
+
+Build this **only** when ticket **#13** says
+`WAC, implement the default Missing Info worker`. If #13 gives other
+instructions, follow those; if the ESE said they will handle it, this section is
+unused.
+
+Base case: referring provider hits Provide → note the uploads → set order
+status back to `On Track` → spawn **this org's** Fax Wrangler.
 
 | File | Role |
 | - | - |
-| `orgs/flomed/workflows/invisible/patient-pipeline-missing-info/patient-pipeline-missing-info.ts` | The "Provide" button target. ~180 lines; copy nearly verbatim. |
+| `orgs/flomed/workflows/invisible/patient-pipeline-missing-info/patient-pipeline-missing-info.ts` | The "Provide" button target. ~180 lines; copy nearly verbatim. assistantId `6a3b3f8df4284b7abf8922af`, slug `flomed`. **Pull prod before copying.** |
 
 **Copy this:** the `WorkflowBlockType.MISSING_INFO` root with
 `rawExact(StepType.MISSING_INFO)`; the `confirmInput` mapping
 `MISSING_INFO: externalId|notes|externalFiles` alongside `MANUAL: Order_id`;
 `combineFiles` → `readTomEntity` by `EXTERNAL_ORDER_ID` → `tom.orderNote` →
-`spawnWorkflow`. Note the defaulted note reads
+**`status: "On Track"`** → `spawnWorkflow`. Note the defaulted note reads
 `{{notes[0].message, "No known missing info"}}` — always default, because the
 referring provider can submit with an empty note.
 
 **Do not copy:** `importWorkflow("Fax Wrangler Extended")` /
-`pinnedMajorVersion: 5` — resolve the customer's own target and its live major.
+`pinnedMajorVersion: 5` — resolve the customer's own target and its live major
+(`tennr team list`). Tell the ESE they must point Referral Pipeline's Missing
+Info setting at this new worker (app-side).
 
 ---
 

@@ -1,9 +1,10 @@
 # Referral Center — Missing Info / Rejected Writes Prompt
 
-> Customer-agnostic by design. Everything specific to your customer — org,
-> whether E&B and Qualifications are live, which workers to edit, stage names,
-> and how those workers decide Missing Info vs Rejected — is in the **Linear
-> ticket body** (the filled ESE input). The prompt files are attachments on that
+> Customer-agnostic by design. Everything specific to your customer — org
+> folder, whether E&B and Qualifications are live, which workers to edit
+> (**#4**), stage names, the Provide-button instructions (**#13**), and how
+> those workers decide Missing Info vs Rejected — is in the **Linear ticket
+> body** (the filled ESE input). The prompt files are attachments on that
 > ticket.
 >
 > **Read that ticket before doing anything.** If a fact is blank, ambiguous, or
@@ -20,12 +21,18 @@
 ## Your role
 
 Implement **Referral Center Missing Info / Rejected writes** for one Tennr org
-in the `tennr-workflows` Workflows-as-Code repo (`~/dev/tennr-workflows`) — two
-edits into existing workers:
+in the `tennr-workflows` Workflows-as-Code repo (`~/dev/tennr-workflows`):
 
-1. Missing Info / Rejected writes inserted into the existing **E&B** worker.
-2. Missing Info / Rejected writes inserted into the existing **Qualifications**
-   worker.
+1. Missing Info / Rejected / On Track writes inserted into the existing **E&B**
+   worker, if **#2** is yes.
+2. Missing Info / Rejected / On Track writes inserted into the existing
+   **Qualifications** worker named in **#4**. This is mandatory whenever #4
+   lists a Qual worker — **naming the worker is the instruction to edit it.**
+   Do not skip this because the CRON prompt already ran; if that prompt said
+   Qual/E&B writes were out of scope *there*, the exclusion does not apply here.
+3. The **Provide-button worker**, only if **#13** says
+   `WAC, implement the default Missing Info worker`. Otherwise follow the
+   explicit instructions in #13, or skip it and say so if the ESE is handling it.
 
 Which workers, and whether each is live, come from the Linear ticket body
 (**#2**, **#3**, **#4**). **Pull each from prod before reading it** (Safety rule
@@ -33,7 +40,8 @@ Which workers, and whether each is live, come from the Linear ticket body
 customer-facing workers.
 
 The CRON that syncs Scheduled / Completed from the EHR is a **separate prompt**
-(`wac-prompt-cron.md`). Do not do that work here.
+(`wac-prompt-cron.md`). Do not implement that work here — but if the CRON's
+terminal semantics conflict with the Qual/E&B status writes, **report it**.
 
 **Run that prompt first.** This one demotes a passing Qual decision from
 `Completed` to `On Track`, which is only correct if something downstream
@@ -102,6 +110,12 @@ status / missing-info / rejection on the expected order. Report the IDs.
 `bindSorTable`, `importModule`, and `bindTeamGroup` resolve names that must
 already exist in the target org. Confirm with `tennr team list …`,
 `tennr team describe module`, and `tennr schema ehr` before writing the binding.
+
+**6. Resolve the org by its `orgs/` folder name, not its display name.** Ticket
+**#1** is the folder under `orgs/` (kebab-case). Confirm with
+`ls ~/dev/tennr-workflows/orgs | grep -i '<name>'`. If `ls` does not match,
+**stop and ask**. Team ID comes from the pulled workflow's metadata, not from
+the ticket.
 
 ---
 
@@ -276,7 +290,8 @@ Work them in order. Report at each boundary; don't batch up surprises.
 
 ### Phase 0 — Verify the input before building
 
-Read the **Linear ticket body** in full (that is the ESE input). Pull the
+Read the **Linear ticket body** in full (that is the ESE input). Resolve the
+org folder from **#1** (`ls orgs | grep -i …`) — see Safety rule 6. Pull the
 reference workers listed under "Missing Info / Rejected writes to insert into
 existing workers" in `reference-index.md` before reading them, and copy their
 *shape* only — stage names, decision labels and message wording belong to the
@@ -299,7 +314,11 @@ org they came from.
    should be resolvable by the referring provider only (`REFERRING_USER`).
 7. Confirm every stage name in **#10**. If a stage is marked `(e&b)` or
    `(qual)`, that is the stage to write at the start of that worker.
-8. Create the draft branch and add the workflows you will edit (see Safety
+8. Restate **#13**. If it says `WAC, implement the default Missing Info worker`,
+   Phase 3 is the Provide-button worker. If it gives other explicit
+   instructions, follow those. If the ESE said they will handle it, skip
+   Phase 3 and say so.
+9. Create the draft branch and add the workflows you will edit (see Safety
    rule 2). Team ID comes from the workflow `.ts` metadata, not the ticket.
 
 ### Phase 1 — E&B writes
@@ -350,7 +369,28 @@ worker does not decide.
 **Proof required:** real run IDs showing Missing Info and Rejected from Qual,
 with externally legible messages/reasons, and the control order unchanged.
 
-### Phase 3 — Self-review
+### Phase 3 — Provide-button worker (gated on #13)
+
+Skip entirely — and say so — if **#13** says the ESE is handling it. If #13
+gives explicit custom instructions, follow those instead of the base case.
+
+If **#13** says `WAC, implement the default Missing Info worker`:
+
+1. Pull the copyable template from prod:
+   `orgs/flomed/workflows/invisible/patient-pipeline-missing-info/`
+   (assistantId `6a3b3f8df4284b7abf8922af`, slug `flomed`).
+2. Copy the shape: `WorkflowBlockType.MISSING_INFO` root, `confirmInput`
+   mapping `externalId | notes | externalFiles`, `combineFiles` →
+   `readTomEntity` by `EXTERNAL_ORDER_ID` → `tom.orderNote` → set order
+   `status` back to **`On Track`** → `spawnWorkflow` to **this org's** Fax
+   Wrangler.
+3. Resolve Fax Wrangler in the **target** org (`tennr team list`, live
+   `pinnedMajorVersion`). Do not copy Flomed's workflow name or pin.
+
+**Then tell the ESE** they must set this workflow as the Missing Info target in
+Referral Pipeline settings (app-side). You cannot do that.
+
+### Phase 4 — Self-review
 
 Verify each item from the CLI (`tennr run list` / `run get` / `run logs`), not
 by eyeballing the app. Report pass/fail per line.
@@ -360,8 +400,11 @@ by eyeballing the app. Report pass/fail per line.
 - [ ] Every order set to `Rejected` has a rejection reason.
 - [ ] E&B insurance-missing and OON (and every other insurance rejection path)
   write status + entity, if E&B is live (**#2**).
-- [ ] Qual Missing Info and Not Qualified write status + entity, on the
-  populations Qual actually decides (**#3**).
+- [ ] Qual Missing Info, Not Qualified, and Qualified write status + entity, on
+  the populations Qual actually decides (**#3**). **Fail this line if #4 named
+  a Qual worker and you did not edit it.**
+- [ ] Provide-button worker exists and sets `On Track` + spawns Fax Wrangler,
+  **or** #13 said otherwise and you reported what you did (or skipped) instead.
 - [ ] The control order is unchanged.
 
 Anything failing goes to Ben Howe, not into a silent workaround.

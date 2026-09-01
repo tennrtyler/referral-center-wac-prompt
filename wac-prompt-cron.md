@@ -1,9 +1,10 @@
 # Referral Center — CRON Sync Prompt
 
-> Customer-agnostic by design. Everything specific to your customer — org,
-> credentials, WIP mappings, date fields, modules, stages, how to read status
-> out of the EMR, and how the CRON should loop — is in the **Linear ticket
-> body** (the filled ESE input). The prompt files are attachments on that ticket.
+> Customer-agnostic by design. Everything specific to your customer — org
+> folder, credentials, WIP mappings, date fields, modules, stages, how to read
+> status out of the EMR, and how the CRON should loop — is in the **Linear
+> ticket body** (the filled ESE input). The prompt files are attachments on that
+> ticket.
 >
 > **Read that ticket before doing anything.** If a fact is blank, ambiguous, or
 > contradicts the repo, **stop and ask**. Do not guess.
@@ -96,6 +97,13 @@ stage/status/note on the expected order. Report the IDs.
 `bindSorTable`, `importModule`, and `bindTeamGroup` resolve names that must
 already exist in the target org. Confirm with `tennr team list …`,
 `tennr team describe module`, and `tennr schema ehr` before writing the binding.
+
+**6. Resolve the org by its `orgs/` folder name, not its display name.** Ticket
+**#1** is the folder under `orgs/` (kebab-case). Confirm with
+`ls ~/dev/tennr-workflows/orgs | grep -i '<name>'` — "Tactile" is not a folder;
+`tactile` might be. If `ls` does not match, **stop and ask**. Team ID comes from
+the pulled workflow's `tennr.config.ts` / `defineWorkflow` metadata, not from
+the ticket.
 
 ---
 
@@ -401,15 +409,10 @@ checking Brightree is too costly. Two options:
   "Completed" in Brightree, so if the customer marks orders that way (most do)
   it misses exactly the orders you are trying to update. Only use it if you have
   confirmed that doesn't apply.
-- **Ad-Hoc Audit Report — recommended.** One call gets yesterday's WIP
-  transitions; then O(n) TOM operations. Build it in Brightree:
-  Ad-Hoc Reports → "Design A New Report" → "Audit Trail (Last 12 Months)" →
-  Select All → skip the next screen → filter:
-  - `Audit_Audit Type` **Equals** `Sales Order`
-  - `Audit_Audit Detail` **Begins With** `WIP State changed`
-  - `Audit_Audit Date` **In Time Period** `Yesterday`
-  - plus any exclusions (e.g. `Changed By_Login Name` **Doesn't Equal** the SNAP
-    API login)
+- **Ad-Hoc Audit Report — recommended.** Check whether the ESE specified audit
+  reports for you to use — WIP transitions, voided orders, completed sales
+  orders, etc. One report call replaces the many per-order Brightree requests
+  that hog credentials.
 
   Pull it with the `REQUEST_REPORT` PAPI. The Audit Date column carries a
   timestamp, so a `codeBlock` can window to only changes since your last sync.

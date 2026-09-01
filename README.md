@@ -1,120 +1,77 @@
-Implement Referral Center for {{org}} using the WAC prompts below.
+# Referral Center — WAC Implementation Kit
 
-Run them in this order, completing each before starting the next:
+The ESE fills the 13-question worksheet in `ese-input.md`. That filled
+worksheet **is the Linear ticket body**. The three other markdown files are
+**attached to the same ticket as Linear file embeds**
+(`linear-embed` `node-type="file"`). WAC must download those embeds first —
+`get_issue` often omits them.
 
-1. wac-prompt-cron.md — the EHR → TOM Scheduled/Completed sync. Build this first: it is what eventually completes an
-   order.
-2. wac-prompt-missing-info.md — Missing Info / Rejected writes into the existing E&B and Qualifications workers. This
-   demotes a passing Qual decision to On Track, which is only safe once the CRON above exists to complete it.
+| File | Who touches it | What it is |
+| - | - | - |
+| `ese-input.md` | **You, the ESE.** Fill it, paste into the ticket body. | Bootstrap + run order + 13 questions. |
+| `wac-prompt-cron.md` | Attach to the ticket | Prompt 1 of 2: the EHR → TOM Scheduled / Completed sync. |
+| `wac-prompt-missing-info.md` | Attach to the ticket | Prompt 2 of 2: Missing Info / Rejected / On Track writes into E&B + Qual, and the Provide-button worker per #13. |
+| `reference-index.md` | Attach to the ticket | Shipped builds to copy *shape* from (after `tennr pull prod`). Not a prompt to run. |
 
-reference-index.md is a shared reference read by both, not a prompt to run.
+**Run order matters.** The CRON prompt goes first: it is what eventually
+completes an order. The missing-info prompt demotes a passing Qual decision to
+`On Track`, which is only safe once the CRON exists to complete it. Running
+only the CRON prompt and treating the Qual/E&B writes as out of scope is a
+miss — both prompts run against the same ticket.
 
-{{attach all three files here}}
+## Before you start — the gate
 
-Referral Center - ESE Input
+From the Master Deployment Plan:
 
-Fill in the 12 answers below, then pass this ticket into WAC and tell it to go to town.
+1. **Does your customer create orders in the traditional sense** (most DME,
+   drugs, etc.)? If **no** → message Ben Howe for a planning meeting. Stop here.
+2. **Is Qualifications implemented?** If **no**, missing info may look different
+   — check with Ben Howe before building.
 
-Answer every one (write none or unknown rather than leaving a line empty).
+If those are clear → fill in the worksheet.
 
-1. Org name
+## How to run it
 
-e.g. williams-brothers
+1. Fill in `ese-input.md`. Questions **6, 7, 11, and 12** gate the sync.
+   **#10** must list every stage — add a Completed stage in the app if one
+   does not exist. **#13** is the Provide-button instruction.
+2. Create a Linear ticket whose **description is the filled worksheet** (keep
+   the WAC bootstrap / run-order block at the top).
+3. Attach `wac-prompt-cron.md`, `wac-prompt-missing-info.md`, and
+   `reference-index.md`. If #11 is an API, attach those docs too.
+4. Open a WAC session in `~/dev/tennr-workflows` against that ticket. The agent
+   downloads the three embeds, then runs both prompts in order.
+5. Work the phases. The agent pulls prod before reading any existing worker,
+   stops at Phase 0 to confirm mappings, and again before touching any
+   historical order.
 
-→
+## What you still own
 
-2. Is E&B live? (yes / no)
+The agent builds and tests. It cannot:
 
-→
+- **Set the Missing Info workflow in Referral Pipeline settings** (app-side).
+- **Schedule the CRON cadence** (app-side; twice a day, credential-permitting).
+- **Add pipeline stages** — add a Completed stage yourself if #10 has no
+  `(completed)` marker.
+- **Approve the stale-order backfill.**
 
-3. Is Qualifications live? (yes / no - if no, missing info may look different, and you should check with Ben Howe)
+And the part no prompt replaces: **testing and validating the work is still
+expected of you.** The agent reports run IDs; you read them.
 
-→
+## Escalate to Ben Howe when
 
-4. Workflows to touch: assistant name or assistant id, one per line (E&B and Qual)
+- The Scheduled or Complete mapping is conditional or varies (by SKU, multiple
+  WIP states, edge cases) — the prompt will stop rather than guess.
+- Qualifications is not live and missing-info behavior is unclear.
+- Any self-review item fails.
+- Orders legitimately have no Referring Practitioner or Referring Facility.
+- You're past a week on this.
 
-e.g. qualifications or <assistantId>
+## Source
 
-→
+Notion: *REFERRAL CENTER - Master Deployment Plan*. Rollout waves:
+`https://docs.google.com/spreadsheets/d/1N30QvuCR9sdifI4uS_1LIWQENWc7M3KZfn7nOzsLW1E`
 
-5. Credential name + type, exactly as it appears in the org
-
-e.g. Brightree Creds / BRIGHTREE
-
-→
-
-6. "Scheduled" means these EHR WIP/Task states
-
-This will depend heavily on your customer, and is something you should check with them. In general, we want to capture
-here for the referring provider that everything has been set up ('scheduled') for the patient to get their treatment,
-but they haven't actually gotten it yet. For DME, this usually means the device has been shipped/is scheduled for
-delivery. For infusions, this usually means an appointment has been scheduled for the patient to get infused. Copy/paste
-exact strings verbatim, casing and punctuation included, one per line.
-
-→
-
-7. "Complete" means these EHR WIP/Task states
-
-This will also depend on your customer and is something you should check with them. We want to capture here what
-'Completed' means for the referring provider, not for Tennr. What state in the EMR signals that the patient got their
-care? The device was delivered; they showed up for the appointment; etc. Copy/paste exact strings verbatim, casing and
-punctuation included, one per line, e.g., WIP - Device Delivered)
-
-→
-
-8. Scheduled date - which EHR field? (or none)
-
-There is often a date associated with the scheduled state such as when the device was shipped or the appointment was
-made (e.g., scheduledDate + scheduledTime)
-
-→
-
-9. Completed date - which EHR field? (or none)
-
-There is usually a date recorded when the patient gets their care. Put where to find that in the EMR here, or, if you
-think the timestamp when the status is updated will be sufficient, that works too (e.g. actualDate + actualTime)
-
-→
-
-10. Referral Pipeline stages, exactly as configured in the app
-
-One per line, marking (default), (e&b), (qual), (scheduled), (completed). Or write none configured yet. WAC is not able
-to fetch this information so it needs to be pasted manually.
-
-e.g. Referral Received (default), Processing Order, Qualifications (qual), Delivery Scheduled (scheduled), Delivery
-Completed (completed)
-
-→
-
-11. How do we read order status out of the EHR?
-
-Module path(s) + version, OR report name, OR API endpoint.
-
-If it's an API, attach the docs alongside this file.
-
-e.g. /ehr/brightree/papi/get_sales_orders_with_filters v1.1.0
-
-→
-
-12. Instructions for CRON Looping
-
-THIS IS THE MOST CRITICAL THING TO THINK THROUGH.
-
-Based on the integrations you have to fetch and sync statuses, should you loop through all TOM orders and ping the EMR
-for each to check status?
-
-If credential time is a limited resource, is there a way you can bulk fetch statuses and simply loop over them in Tennr
-to update TOM?
-
-If you do fetch in bulk, are there any you might miss (e.g., archived/completed/voided orders)? Nothing should slip
-through the cracks - we don't want 7mo old orders sitting in On Track.
-
-Think through how many orders you might be looping over. If it's going to be a ton, do you have any direction on how
-you'd like this to be done?
-
-How frequently can you get the CRON to run (ideally twice a day but once a day at minimum is recommended).
-
-If provider is not always populated during order creation but they add it into the EMR later, can you backfill using
-this CRON worker when you pull order info?
-
-→
+Note: Referral Center rolls out **independently of Referral Pipeline** in most
+cases. Unless RP has been explicitly rolled out for your customer, direct them
+to **Patient Hub** to view order statuses.
