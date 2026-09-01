@@ -1,70 +1,55 @@
 # Referral Center — Missing Info / Rejected Writes Prompt
 
-> Customer-agnostic by design. Everything specific to your customer — org,
-> whether E&B and Qualifications are live, which workers to edit, stage names,
-> and how those workers decide Missing Info vs Rejected — is in the **Linear
-> ticket body** (the filled ESE input). The prompt files are attachments on that
-> ticket.
+> Customer-agnostic by design. Everything specific to your customer — org
+> **slug**, whether E&B and Qualifications are live, which workers to edit
+> (**#4**), stage names, the Provide-button path (**#14**), and how those
+> workers decide Missing Info vs Rejected — is in the **Linear ticket body**.
 >
 > **Read that ticket before doing anything.** If a fact is blank, ambiguous, or
-> contradicts the repo, **stop and ask**. Do not guess.
->
-> **Get the attachments first.** The prompt files are `linear-embed
-> node-type="file"` attachments on the issue description. `get_issue` does not
-> reliably return inline embeds, and an empty `attachments` array does **not**
-> mean there are none. Download every attached file before you start. If the
-> ticket names a file you cannot retrieve, **ask**; do not proceed without it.
+> contradicts what you just pulled from prod, **stop and ask**. Do not guess. Make sure to review the 3 `linear-embed` `node-type="file"` markdown files from the issue
+description. Download them first. If you cannot find
+`wac-prompt-cron.md`, `wac-prompt-missing-info.md`, or `reference-index.md`,
+**prompt the user** — `get_issue` often omits inline file embeds.
 
 ---
 
 ## Your role
 
-Implement **Referral Center Missing Info / Rejected writes** for one Tennr org
-in the `tennr-workflows` Workflows-as-Code repo (`~/dev/tennr-workflows`) — two
-edits into existing workers:
+You are implementing **Referral Center Missing Info / Rejected writes** for one
+Tennr org in the `tennr-workflows` Workflows-as-Code repo
+(`~/dev/tennr-workflows`).
 
-1. Missing Info / Rejected writes inserted into the existing **E&B** worker.
-2. Missing Info / Rejected writes inserted into the existing **Qualifications**
-   worker.
+This prompt covers:
+
+1. **Missing Info / Rejected / On Track writes** inserted into the existing
+   **E&B** worker, if **#2** is yes.
+2. **Missing Info / Rejected / On Track writes** inserted into the existing
+   **Qualifications** worker named in **#4**. This is mandatory whenever #4
+   lists a Qual worker. **Naming the worker is the instruction to edit it.**
+   Pull prod, then insert the status writes on every Qual decision path
+   (Missing Info / Not Qualified / Qualified → Missing Info / Rejected /
+   On Track). Do not skip this because the CRON prompt already ran.
+3. The **Provide-button worker**, only if **#14** is `WAC, implement Base Case.`
+   If #14 is `WAC, hold off. I got this.`, skip it and say so.
 
 Which workers, and whether each is live, come from the Linear ticket body
-(**#2**, **#3**, **#4**). **Pull each from prod before reading it** (Safety rule
-1) — the repo copy is routinely months stale, and these are live
-customer-facing workers.
+(**#2**, **#3**, **#4**).
 
 The CRON that syncs Scheduled / Completed from the EHR is a **separate prompt**
-(`wac-prompt-cron.md`). Do not do that work here.
+(`wac-prompt-cron.md`). Do not *implement* that work here — but if the CRON's
+terminal semantics conflict with Qual/E&B status writes, **report it**.
 
-**Run that prompt first.** This one demotes a passing Qual decision from
-`Completed` to `On Track`, which is only correct if something downstream
-eventually completes the order. Without the CRON in place, qualified orders sit
-`On Track` forever — worse than where you started. If the CRON does not exist
-yet for this org, **stop and say so** before changing the Qual status mapping.
-
-**Never guess a customer-specific fact.** Worker names, assistant IDs, stage
-names, credential names, order-type names, and the wording a referring provider
-should see all come from the ticket. If the ticket is blank, ambiguous, or
-contradicts what you find in the repo, **stop and ask**.
+**The single most important rule: never guess a customer-specific fact.** Worker
+names, assistant IDs, stage names, credential names, order-type names, and the
+wording a referring provider should see all come from the ticket. If the ticket
+is blank, ambiguous, or contradicts what you just pulled from prod, **stop and
+ask**.
 
 ---
 
 ## Safety rules (non-negotiable)
 
-**1. The repo is not authoritative for existing workers — pull prod first.**
-
-A checked-in `.ts` can be months behind production. Before reading any existing
-workflow to learn how the org behaves:
-
-```bash
-tennr pull prod --assistant-id <id> --team-id <teamId> --out <path> --slug <slug>
-```
-
-This matters more here than anywhere else: this prompt **edits live
-customer-facing workers**, and the decision branch you are inserting next to may
-not exist in the repo copy at all. `pull` drops the display name and slug, so
-pass `--slug`. Applies to reference workers too — pull before copying.
-
-**2. Test on drafts only. Never execute a live workflow version.**
+**1. Test on drafts only. Never execute a live workflow version.**
 
 The CLI always talks to prod (`api.tennr.com`) — "dev" vs "prod" is *which
 version executes*, not which host. Before any `tennr run start`, confirm the
@@ -85,23 +70,39 @@ tennr run start ./<workflow>.ts --branch referral-center --team-id <teamId>
   state**; a concurrent `tennr` command overwrites it. Never trust
   `tennr branch current` to persist — always name the target explicitly with
   `--branch` and `--team-id` on every push/run/check.
-- To exercise a cascade on drafts, set **`useDraftVersion: true`** on the spawn
-  and revert it before pushing. Never leave it set on a pushed version: it
-  permanently points production at the child's draft.
+- Any cascade you drive must spawn children with **`useDraftVersion: true`** so
+  the whole chain stays on drafts.
 - If you cannot confirm a run targets a draft, **do not run it**. Stop and ask.
 
-**3. No git remote writes.** No `git push`, no PRs, no branch pushes, no
+**2. No git remote writes.** No `git push`, no PRs, no branch pushes, no
 `gh` commands. Leave local edits in the working tree.
 
-**4. "Done" requires real run IDs.** `pnpm typecheck` and `tennr check` are
+**3. "Done" requires real run IDs.** `pnpm typecheck` and `tennr check` are
 necessary but never sufficient. A build is complete only when you have actual
 `tennr run` IDs whose **step results you read** and which show the expected
 status / missing-info / rejection on the expected order. Report the IDs.
 
-**5. Never bind a resource that doesn't exist.** `importCredential`,
+**4. Never bind a resource that doesn't exist.** `importCredential`,
 `bindSorTable`, `importModule`, and `bindTeamGroup` resolve names that must
 already exist in the target org. Confirm with `tennr team list …`,
 `tennr team describe module`, and `tennr schema ehr` before writing the binding.
+
+**5. The repo is not authoritative.** A checked-in `.ts` may be months behind
+production. Before reading the Qual or E&B worker named in **#4**, or any
+referenced example:
+
+```bash
+tennr pull prod --assistant-id <id> --out <path> --slug <slug>
+```
+
+Never infer live behaviour from a repo file you did not just pull. Pull drops
+the display name and slug — always pass `--slug`.
+
+**6. Resolve the org by slug, not display name.** Ticket **#1** is the folder
+under `orgs/` (kebab-case). Confirm with
+`ls ~/dev/tennr-workflows/orgs | grep -i '<name>'`. If `ls` does not match,
+**stop and ask**. Team ID comes from the pulled workflow's `tennr.config.ts`,
+not from the ticket.
 
 ---
 
@@ -125,8 +126,8 @@ Referral Pipeline configuration page — casing, spacing, and punctuation
 included. Omitting it defaults to the team's default stage. There is no
 validation error for a typo; it just doesn't take effect as intended.
 
-Only change `stage` if ticket **#10** marks an `(e&b)` or `(qual)` stage. These
-writes are primarily **status + entity**.
+Only change `stage` if ticket **#10** marks an `(e&b)` or `(qual)` stage.
+These writes are primarily **status + entity**.
 
 ### Hold one handle per entity
 
@@ -165,6 +166,14 @@ only.
 is what filters.
 
 ```ts
+b.updateTennrObject(
+  {
+    updates: [{ value: "Missing Info", fieldPath: "status" }],
+    variableType: "ORDER",
+    variableReference: "order_entity",
+  },
+  { key: "<uuid>", name: "Set Order Status | Missing Info" },
+);
 b.createTennrObject(
   tom.missingInfo(
     {
@@ -179,14 +188,6 @@ b.createTennrObject(
     },
   ),
   { key: "<uuid>", as: "created_missing_info" },
-);
-b.updateTennrObject(
-  {
-    updates: [{ value: "Missing Info", fieldPath: "status" }],
-    variableType: "ORDER",
-    variableReference: "order_entity",
-  },
-  { key: "<uuid>", name: "Set Order Status | Missing Info" },
 );
 ```
 
@@ -241,29 +242,10 @@ b.createVariables(
 from the output entirely, not written as `""`. Default a value with
 `{{var,"fallback"}}` rather than assuming it passes through.
 
-**`notes` is a LIST — build it with `useCommaSeparatedValues: false`.** A
-decision note containing a comma is otherwise split into several bogus notes.
-
-**Create the entity BEFORE setting the status, and put both in the SAME
-`tryCatch`.** If the entity write fails, the status is then never changed and
-the order keeps its previous state — you never strand one as `Rejected` with no
-reason, or `Missing Info` with nothing to act on. Two details matter equally:
-
-- *Order.* Status-first leaves exactly the broken state this prompt exists to
-  prevent.
-- *One `tryCatch`.* Giving the entity its own block swallows the error and the
-  status is written regardless — same broken state, just harder to spot.
-
-Both reference implementations in `reference-index.md` create first.
-
-(This is the opposite of the note/date ordering in `wac-prompt-cron.md`, and
-deliberately so: a note is decoration, so the status write goes first there. A
-Missing Info or Rejection entity is *required*, so it goes first here.)
-
 **Isolate the TOM writes.** Put Missing Info / Rejected writes next to the
-existing decision branch — the path that already decided "missing insurance",
-"OON", "not qualified". Do not invent new decision logic. If you cannot find the
-decision site in the named worker, **stop and ask**.
+existing decision branch (the path that already decided "missing insurance",
+"OON", "not qualified", etc.). Do not invent new decision logic. If you cannot
+find the decision site in the named worker, **stop and ask**.
 
 **`pinnedMajorVersion` must match the deployed child's major** if you spawn
 anything. Check before pushing.
@@ -276,45 +258,58 @@ Work them in order. Report at each boundary; don't batch up surprises.
 
 ### Phase 0 — Verify the input before building
 
-Read the **Linear ticket body** in full (that is the ESE input). Pull the
-reference workers listed under "Missing Info / Rejected writes to insert into
-existing workers" in `reference-index.md` before reading them, and copy their
-*shape* only — stage names, decision labels and message wording belong to the
-org they came from.
+Read the **Linear ticket body** in full (that is the ESE input). Resolve the
+org **slug** from **#1** (`ls orgs | grep -i …`) — not the display name.
+
+**Pull the workers named in #4 from prod before you read them.** Example
+shapes, after pull (slug `williams-brothers`):
+
+```bash
+# E&B  — orgs/williams-brothers/workflows/visible/e-b/
+tennr pull prod --assistant-id 69bd2034fd657e39604be575 \
+  --out orgs/williams-brothers/workflows/visible/e-b --slug williams-brothers
+
+# Qualifications — orgs/williams-brothers/workflows/visible/qualifications/
+tennr pull prod --assistant-id 69c3f2c87a49e536a12b742a \
+  --out orgs/williams-brothers/workflows/visible/qualifications \
+  --slug williams-brothers
+```
+
+Do not treat the checked-in Williams Brothers `.ts` as live.
 
 1. Restate whether E&B is live (**#2**), whether Qualifications is live
-   (**#3**), and which workers you will edit (**#4**).
+   (**#3**), and which workers you will edit (**#4** — name **and**
+   assistantId). If #4 lists a Qual worker, Phase 2 is **mandatory**.
 2. If Qualifications is **not** live, missing info may look different —
    **check with Ben Howe** before building. Do not invent a Qual-shaped write
    path.
 3. Skip E&B entirely if **#2** is `no`.
-4. Read the named workflow folders — from a **prod pull**, not the repo copy.
-   Read each folder's `learnings.md` first if one exists. Find where E&B and
-   Qual decisions actually happen.
-5. **Record what each decision path writes today**, before changing anything. A
-   path setting `Completed`, or setting a status with no accompanying entity,
-   are both defects this prompt fixes. Report the current mapping alongside the
-   new one.
-6. Confirm `resolvableBy`: default `ALL`, unless the ticket says Missing Info
+4. Pull each named workflow from prod, then read it. Read each folder's
+   `learnings.md` first if one exists. Find where E&B decisions and Qual
+   decisions actually happen.
+5. Confirm `resolvableBy`: default `ALL`, unless the ticket says Missing Info
    should be resolvable by the referring provider only (`REFERRING_USER`).
-7. Confirm every stage name in **#10**. If a stage is marked `(e&b)` or
+6. Confirm every stage name in **#10**. If a stage is marked `(e&b)` or
    `(qual)`, that is the stage to write at the start of that worker.
+7. Restate **#14**. If it is `WAC, implement Base Case.`, Phase 3 is the
+   Provide-button worker. If it is `WAC, hold off. I got this.`, skip Phase 3
+   and say so.
 8. Create the draft branch and add the workflows you will edit (see Safety
-   rule 2). Team ID comes from the workflow `.ts` metadata, not the ticket.
+   rule 1). Team ID comes from the pulled metadata, not the ticket.
 
 ### Phase 1 — E&B writes
 
 Skip entirely if **#2** is `no`. Otherwise, in the existing E&B worker named
 in **#4**:
 
-- If the worker does not update stage yet and **#10** marks an `(e&b)` stage,
-  update the stage to that name, near the beginning of the worker and before any
-  pause for human review.
+- If stage is not updated yet in the worker and **#10** marks an `(e&b)` stage,
+  update the stage to that name. This should happen near the beginning of the
+  worker before any pause for human review.
 - Missing insurance information → `status: "Missing Info"` + `tom.missingInfo`
   with a legible message (e.g. "Missing insurance").
 - Out of Network → `status: "Rejected"` + `tom.rejectionInfo` with a reason
-  stating Out of Network. Same for every other insurance-related rejection path
-  in the workflow — find them all, don't stop at the first.
+  stating Out of Network. Do the same for every other insurance-related
+  rejection path in the workflow — find them all, don't stop at the first.
 - Otherwise → `status: "On Track"`
 
 **Proof required:** real run IDs showing Missing Info and Rejected (and a
@@ -323,21 +318,20 @@ orders if the ticket did not name them.
 
 ### Phase 2 — Qualifications writes
 
-In the existing Qualifications worker named in **#4**:
+**This phase is mandatory if #4 lists a Qual worker.** If you finish this
+prompt without editing that worker, you are not done — say so explicitly.
 
-- If the worker does not update stage yet and **#10** marks a `(qual)` stage,
-  update the stage to that name, near the beginning of the worker and before any
-  pause for human review.
+Pull that worker from prod (`--assistant-id` from #4, `--slug` from #1), then
+in that file:
+
+- If stage is not updated yet in the worker and **#10** marks a `(qual)` stage,
+  update the stage to that name. This should happen near the beginning of the
+  worker before any pause for human review.
 - Qual output path `Missing Info` → `status: "Missing Info"` + `tom.missingInfo`
   with the qual decision note as the `message`.
 - Qual output path `Not Qualified` (or the equivalent rejected case) →
   `status: "Rejected"` + `tom.rejectionInfo` carrying the qual output note.
-- Qual output path `Qualified` → `status: "On Track"`. **Not `Completed`** —
-  passing qualification is not the patient receiving care, and `Completed` shown
-  to a referring provider means their patient was taken care of. If the worker
-  currently writes `Completed` here, that is the defect; changing it is the
-  point. Some reference orgs treat Qual as terminal and legitimately write
-  `Completed` — that only holds where nothing downstream delivers.
+- Qual output path `Qualified` → `status: "On Track"`
 
 Use the actual output labels the worker already emits. If they are not
 `Missing Info` / `Not Qualified`, map from what you find — do not rename the
@@ -349,8 +343,31 @@ worker does not decide.
 
 **Proof required:** real run IDs showing Missing Info and Rejected from Qual,
 with externally legible messages/reasons, and the control order unchanged.
+Report the file path you edited.
 
-### Phase 3 — Self-review
+### Phase 3 — Provide-button worker (only if #14 is Base Case)
+
+Skip entirely if **#14** is `WAC, hold off. I got this.` Report that the ESE
+owns the fancy path.
+
+If **#14** is `WAC, implement Base Case.`:
+
+1. Pull the copyable template from prod:
+   `orgs/flomed/workflows/invisible/patient-pipeline-missing-info/`
+   (assistantId `6a3b3f8df4284b7abf8922af`, slug `flomed`).
+2. Copy the shape: `WorkflowBlockType.MISSING_INFO` root,
+   `confirmInput` mapping `externalId | notes | externalFiles`,
+   `combineFiles` → `readTomEntity` by `EXTERNAL_ORDER_ID` → `tom.orderNote`
+   → set order `status` back to **`On Track`** → `spawnWorkflow` to **this
+   org's** Fax Wrangler.
+3. Resolve Fax Wrangler in the **target** org (`tennr team list`, live
+   `pinnedMajorVersion`). Do not copy Flomed's or Williams Brothers' workflow
+   name or pin.
+
+**Then tell the ESE** they must set this workflow as the Missing Info target
+in Referral Pipeline settings (app-side). You cannot do that.
+
+### Phase 4 — Self-review
 
 Verify each item from the CLI (`tennr run list` / `run get` / `run logs`), not
 by eyeballing the app. Report pass/fail per line.
@@ -360,8 +377,11 @@ by eyeballing the app. Report pass/fail per line.
 - [ ] Every order set to `Rejected` has a rejection reason.
 - [ ] E&B insurance-missing and OON (and every other insurance rejection path)
   write status + entity, if E&B is live (**#2**).
-- [ ] Qual Missing Info and Not Qualified write status + entity, on the
-  populations Qual actually decides (**#3**).
+- [ ] Qual Missing Info, Not Qualified, and Qualified write status + entity
+  on the populations Qual actually decides (**#3**). **Fail this line if
+  #4 named a Qual worker and you did not edit it.**
+- [ ] Provide-button worker exists and sets `On Track` + Fax Wrangler, **or**
+  #14 was hold-off and you reported that.
 - [ ] The control order is unchanged.
 
 Anything failing goes to Ben Howe, not into a silent workaround.

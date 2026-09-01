@@ -1,24 +1,19 @@
 # Referral Center — Reference Builds
 
 Shipped implementations of this exact sync, already in `~/dev/tennr-workflows`.
-Read the relevant one **before** writing code. Copy the *shape*; never copy
-customer data — WIP names, stage names, module versions, credential names,
-table names and id formats are all org-specific, in a reference build and on
-the ticket alike.
-
-🚨 **Pull each reference from prod before reading it.** The repo copies go
-stale — checked-in files have been found ~1,000 lines behind production, missing
-entire sections that were later added in the app. A stale reference teaches you
-the wrong shape.
+**Pull prod before you read any of these** — the checked-in `.ts` may be stale:
 
 ```bash
-tennr pull prod --assistant-id <id> --team-id <teamId> --out <path> --slug <slug>
+tennr pull prod --assistant-id <id> --out <path> --slug <slug>
 ```
+
+Copy the *shape*; never copy the customer data (WIP names, stage names, module
+versions, credential names, table names — all org-specific).
 
 This index is maintained separately from the WAC prompt files so new builds can
 be added without retouching them. Architecture selection is driven by Linear
-ticket **#12** (CRON looping), plus **#5** (credentials) and **#11** (how to
-read status).
+ticket **#12** (CRON looping) and **#13** (scope), plus **#5** (credentials)
+and **#11** (how to read status).
 
 ---
 
@@ -30,8 +25,9 @@ per-WIP-state fetching is possible, thousands of open orders.
 
 | File | Role |
 | - | - |
-| `orgs/williams-brothers/workflows/invisible/cron-wip-stage-sync/cron-wip-stage-sync.ts` | Dispatcher: two WIP buckets → per-WIP EHR fetch → accumulate → chunk to 50 → spawn a worker per batch |
-| `orgs/williams-brothers/workflows/invisible/wip-stage-sync-worker/wip-stage-sync-worker.ts` | Worker: parse batch → per order, resolve TOM order → set stage+status → best-effort date note |
+| `orgs/williams-brothers/workflows/invisible/cron-wip-stage-sync/cron-wip-stage-sync.ts` | Dispatcher. assistantId `6a554b8389b7cfba3b8d5b7f`. slug `williams-brothers`. Pull prod before reading. |
+| `orgs/williams-brothers/workflows/invisible/wip-stage-sync-worker/wip-stage-sync-worker.ts` | Worker. assistantId `6a554b748a58b9cb80d4ccd0`. Pull prod before reading. |
+| `orgs/williams-brothers/workflows/invisible/wip-stage-sync-audit/wip-stage-sync-audit.ts` | Report-only TOM/EMR drift audit. assistantId `6a621cbf3fc6676a7d39e1d3`. Only if ticket **#13** asks. |
 
 **Copy this:**
 - The two explicit `createTextList` buckets (`scheduled_wips`, `complete_wips`)
@@ -56,8 +52,8 @@ per-WIP-state fetching is possible, thousands of open orders.
 
 ## Pattern B — Report / SOR-table driven
 
-**Use when:** the customer has a report, database, or SOR table that beats the
-EHR modules — or the EHR is too resource-constrained to poll.
+**Use when:** the customer has a report, database, or SOR table that's a better
+source than the EHR modules — or the EHR is too resource-constrained to poll.
 
 | File | Role |
 | - | - |
@@ -89,8 +85,8 @@ routing, unrelated to Referral Center), the SOR table names.
 
 ## Pattern C — Single workflow, loop TOM orders
 
-**Use when:** low order volume, cheap EHR API, no credential pressure. The
-simplest starting point when the right pattern isn't obvious.
+**Use when:** low order volume, cheap EHR API, no credential pressure. Simplest
+starting point when the right pattern isn't obvious.
 
 | File | Role |
 | - | - |
@@ -116,52 +112,31 @@ livwell stage names.
 
 ---
 
-## Pattern D — TOM-first, patient-keyed EHR API
+## Provide-button worker (Base Case only)
 
-**Use when:** the EHR's only order endpoint is keyed by **patient**, not by
-order or WIP state — so there is no bulk "what changed" call and you must start
-from TOM. A Pattern A dispatcher/worker split over a Pattern C enumeration.
+Build this **only** when ticket **#13** is `WAC, implement the default Missing Info worker`.
+If #14 specifies other instructions or to skip, this section is unused — the ESE owns
+the fancy path (Qual re-entry, custom intake, etc.).
 
-| File | Role |
-| - | - |
-| `orgs/tactile/workflows/cron-referral-center-order-sync/` | Dispatcher: `ORDER_STATUS` sweep → resolve each order's patient → group **by patient** → chunk → spawn |
-| `orgs/tactile/workflows/referral-center-order-sync-worker/` | Worker: one API call per patient → reconcile the response against that patient's open order ids → complete the matches |
-
-**Copy this:**
-- **Group by patient before batching.** One call returns all of a patient's
-  orders, so N open orders for one patient must cost one call, not N.
-- The reconcile `codeBlock`: normalize the EHR status (dash/whitespace/case)
-  before comparing; treat an order absent from the response as *no signal*, not
-  as complete; return an explicit list of orders to complete.
-- The chunker's counters — `skipped` (no usable id), `already_done` (already
-  terminal), `no_ehr_id` (id can never match) — surfaced on `card_name`. Silent
-  drops are how coverage problems hide.
-- Skipping unresolvable orders **at the order level, not the patient level**: a
-  patient can hold both a syncable and an unsyncable order.
-- Gating re-processing on `stage` so a daily re-run is a proven no-op.
-
-**Do not copy:** the `ORD…` / `PT…` id conventions and the `hasEhrOrderId`
-prefix test, the Boomi credential shape, the `New Physician Resource` lookup
-columns, the `"Order Completed"` stage name.
-
----
-
-## Missing Info worker
+Base Case: referring provider hits Provide → set order status back to
+`On Track` → spawn **this org's** Fax Wrangler.
 
 | File | Role |
 | - | - |
-| `orgs/flomed/workflows/invisible/patient-pipeline-missing-info/patient-pipeline-missing-info.ts` | The "Provide" button target. ~180 lines; copy nearly verbatim. |
+| `orgs/flomed/workflows/invisible/patient-pipeline-missing-info/patient-pipeline-missing-info.ts` | Copyable template. assistantId `6a3b3f8df4284b7abf8922af`. slug `flomed`. **Pull prod before copying.** |
 
 **Copy this:** the `WorkflowBlockType.MISSING_INFO` root with
 `rawExact(StepType.MISSING_INFO)`; the `confirmInput` mapping
 `MISSING_INFO: externalId|notes|externalFiles` alongside `MANUAL: Order_id`;
 `combineFiles` → `readTomEntity` by `EXTERNAL_ORDER_ID` → `tom.orderNote` →
-`spawnWorkflow`. Note the defaulted note reads
-`{{notes[0].message, "No known missing info"}}` — always default, because the
-referring provider can submit with an empty note.
+**`status: "On Track"`** → `spawnWorkflow` to Fax Wrangler. Default the note
+(`{{notes[0].message, "No known missing info"}}`) because the referring
+provider can submit with an empty note.
 
 **Do not copy:** `importWorkflow("Fax Wrangler Extended")` /
-`pinnedMajorVersion: 5` — resolve the customer's own target and its live major.
+`pinnedMajorVersion: 5` — resolve the target org's own Fax Wrangler name and
+its live major (`tennr team list`). Tell the ESE they must point Referral
+Pipeline's Missing Info setting at this new worker (app-side).
 
 ---
 
