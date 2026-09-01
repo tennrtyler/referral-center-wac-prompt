@@ -1,9 +1,10 @@
 # Referral Center — CRON Sync Prompt
 
-> Customer-agnostic by design. Everything specific to your customer — org,
-> credentials, WIP mappings, date fields, modules, stages, how to read status
-> out of the EMR, and how the CRON should loop — is in the **Linear ticket
-> body** (the filled ESE input). The prompt files are attachments on that ticket.
+> Customer-agnostic by design. Everything specific to your customer — org
+> folder, credentials, WIP mappings, date fields, modules, stages, how to read
+> status out of the EMR, and how the CRON should loop — is in the **Linear
+> ticket body** (the filled ESE input). The prompt files are attachments on that
+> ticket.
 >
 > **Read that ticket before doing anything.** If a fact is blank, ambiguous, or
 > contradicts the repo, **stop and ask**. Do not guess.
@@ -33,6 +34,12 @@ prompt** (`wac-prompt-missing-info.md`). Do not **implement** that work here —
 but if the E&B or Qual status mapping conflicts with your terminal semantics,
 **report it**. (The common case: a Qual worker that sets `Completed` when
 qualification passes. See Phase 0.)
+
+**This is prompt 1 of 2.** When this build is done, run
+`wac-prompt-missing-info.md` against this same ticket (or state explicitly that
+it is the next session). Naming a Qual worker on the ticket is an instruction to
+edit it there — do not treat this file as the whole job, and do not leave the
+Qual/E&B writes silently undone.
 
 **Never guess a customer-specific fact.** WIP state names, stage names, EHR
 field names, module versions, credential names, order-type names, and looping
@@ -97,6 +104,13 @@ stage/status/note on the expected order. Report the IDs.
 already exist in the target org. Confirm with `tennr team list …`,
 `tennr team describe module`, and `tennr schema ehr` before writing the binding.
 
+**6. Resolve the org by its `orgs/` folder name, not its display name.** Ticket
+**#1** is the folder under `orgs/` (kebab-case). Confirm with
+`ls ~/dev/tennr-workflows/orgs | grep -i '<name>'` — "Tactile" is not a folder;
+`tactile` might be. If `ls` does not match, **stop and ask**. Team ID comes from
+the pulled workflow's `tennr.config.ts` / `defineWorkflow` metadata, not from
+the ticket.
+
 ---
 
 ## The target pipeline shape
@@ -131,6 +145,23 @@ app-side change — ask for it and get the exact string back before you build.
 Same if the org has no stages at all: `Referral Received → Scheduled →
 Completed` is a legitimate minimum (drop Scheduled if #6 says to ignore it). Use
 the stage names from **#10**, character for character.
+
+**If the stage cannot be added before you build** (or #10 says
+`no completed stage`), do not hard-error and do not invent a stage name.
+Default — unless the ESE picks otherwise:
+
+1. **Status only, stage behind a flag (recommended)** — always write
+   `status = "Completed"` (valid even with no matching stage) plus the
+   completed-date note from **#9**, and gate the stage write on a
+   `completed_stage` variable that **ships empty**. One-line change the moment
+   an admin adds a terminal stage; shippable today; cannot hard-error.
+2. **Name the stage now** — the ESE gives the exact terminal stage literal and
+   confirms it is configured; you write stage + status unconditionally.
+3. **Status only, no stage support** — only ever write `status = "Completed"`.
+   Needs a code change later to drive the pipeline column.
+
+Either way, tell the ESE they still need to **add a Completed stage in Referral
+Pipeline settings** — referring providers need a Completed column.
 
 ---
 
@@ -401,8 +432,10 @@ checking Brightree is too costly. Two options:
   "Completed" in Brightree, so if the customer marks orders that way (most do)
   it misses exactly the orders you are trying to update. Only use it if you have
   confirmed that doesn't apply.
-- **Ad-Hoc Audit Report — recommended.** One call gets yesterday's WIP
-  transitions; then O(n) TOM operations. Build it in Brightree:
+- **Ad-Hoc Audit Report — recommended.** Check whether the ESE specified audit
+  reports for you to use — WIP transitions, voided orders, completed sales
+  orders, etc. One report call replaces the many per-order Brightree requests
+  that hog credentials. Example — a WIP-transition report is built in Brightree:
   Ad-Hoc Reports → "Design A New Report" → "Audit Trail (Last 12 Months)" →
   Select All → skip the next screen → filter:
   - `Audit_Audit Type` **Equals** `Sales Order`
@@ -559,8 +592,20 @@ Work them in order. Report at each boundary; don't batch up surprises.
 
 ### Phase 0 — Verify the input before building
 
-Read the **Linear ticket body** in full (that is the ESE input). Pick your
-reference build from `reference-index.md` and pull it before reading it.
+Read the **Linear ticket body** in full (that is the ESE input). Resolve the
+org folder from **#1** (`ls orgs | grep -i …`) — see Safety rule 6. Pick your
+reference build from `reference-index.md` and pull it before reading it, e.g.
+the Williams Brothers dispatcher (keep in mind it is Brightree-specific):
+
+```bash
+tennr pull prod --assistant-id 6a554b8389b7cfba3b8d5b7f --team-id <teamId> \
+  --out orgs/williams-brothers/workflows/invisible/cron-wip-stage-sync \
+  --slug williams-brothers
+```
+
+Its batch worker is assistantId `6a554b748a58b9cb80d4ccd0` at
+`orgs/williams-brothers/workflows/invisible/wip-stage-sync-worker/` — pull it
+too before copying. Do not read the checked-in `.ts` as if it were live.
 
 1. Restate the Scheduled and Complete WIP mappings (**#6**, **#7**) and the
    date fields (**#8**, **#9**) back to the ESE for confirmation — everything
@@ -570,8 +615,9 @@ reference build from `reference-index.md` and pull it before reading it.
    several WIP states, edge cases). Do not guess a rule.
 3. Confirm every stage name in **#10** exists in Referral Pipeline settings,
    character for character. Stages marked `(scheduled)` and `(completed)` are
-   the ones this CRON writes. **If #10 has no terminal stage, stop and get one
-   added** — see "The target pipeline shape".
+   the ones this CRON writes. **If #10 has no terminal stage, ask for one to be
+   added; if it can't be added now, take the empty-`completed_stage` flag
+   path** — see "The target pipeline shape".
 4. **Audit who else writes order status.** Grep the org's *prod-pulled* workers
    for `fieldPath: "status"` and `tom.order({ status })`. If any worker sets
    `Completed` before the terminal event — a Qual worker doing it on a passing
@@ -613,6 +659,10 @@ Build per #12 and the selected pattern. Requirements:
 - If **#12** specified any backfill (e.g. provider populated in the EMR later),
   follow those instructions when you pull order info. Only fill a field that is
   currently empty; never overwrite one already set.
+- If the ticket asks for a **QA audit worker**, clone the shape of
+  `orgs/williams-brothers/workflows/invisible/wip-stage-sync-audit/`
+  (assistantId `6a621cbf3fc6676a7d39e1d3`) after pulling prod. Report-only —
+  it never writes TOM. Do not build one the ticket did not ask for.
 - **Idempotent by construction.** This runs daily against the same orders, so a
   second run must be a no-op: skip orders already at the terminal stage before
   they cost an EHR call. Gate on `stage`, not `status` — if Phase 0 found a
@@ -624,9 +674,13 @@ Scheduled transition if #6 applies), with notes and dates present. Ask the ESE
 for one real order per case plus a control that must not change, if they did
 not already name them on the ticket.
 
-**Then tell the ESE, explicitly, that one app-side step remains that you cannot
-do:** scheduling the CRON cadence (from **#12**; twice a day ideally, once a
-day minimum). The build is not live until that is done.
+**Then tell the ESE, explicitly, what you cannot do app-side:** scheduling the
+CRON cadence (from **#12**; twice a day ideally, once a day minimum), and adding
+a Completed pipeline stage if #10 had none. The build is not live until cadence
+is set.
+
+**Then run `wac-prompt-missing-info.md` against this same ticket** (or state
+that it is the next session). The Qual/E&B status writes are still owed.
 
 ### Phase 2 — Self-review
 
