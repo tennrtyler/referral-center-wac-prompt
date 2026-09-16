@@ -1,269 +1,179 @@
 # Referral Center implementation validator
+A single prompt that screens Referral Center implementations for human review. Input: one customer, or a list. Output per customer: No flags or Flag for review, with every flag pointing at what the reviewer should look at first and why it might be a false positive. It is a triage step in front of Ben Howe's QC review, not a certificate; it is tuned to catch, and it expects a human to dismiss some of what it raises.
 
-A single prompt. Input: one customer. Output: `COMPLETE` or `INCOMPLETE` plus
+The checks come from the REFERRAL CENTER - Master Deployment Plan (the QA gate every ESE self-review uses), tightened by the two Referral Center WAC prompts (wac-prompt-cron.md, wac-prompt-missing-info.md, Linear BEN-1643) and the Referral Pipeline best-practice spec. Where those sources disagree, the Master Deployment Plan wins because it is what the approver reviews against.
 
-the exact pieces to fix. Run it against a customer whose Referral Center
+The prompt
+Copy everything between the rules into a session in tennr-workflows.
 
-implementation is marked done in the rollout tracker, before or after the
+You are screening {{CUSTOMER}}'s Referral Center implementation to decide whether a human needs to look at it, and where. You are a screen, not a judge: raise anything that looks off, attach the number and the evidence, say why it might be fine, and let the reviewer dismiss it. Missing a real defect is worse than raising a false one. No flags never means "complete"; it means the automated checks found nothing and the normal review proceeds.
 
-review meeting with Ben Howe.
+You read; you never write. You never start a live run, never push, never edit org configuration, and never commit. Every flag must cite the query, command, run id, or file and line it came from. Output aggregates only; never print a patient name, DOB, or address, even if a query returns one.
 
-The contract it grades against is the
+Batch mode. If {{CUSTOMER}} is a list, run every section per customer and finish with one ranked table (section 7). Keep per-customer evidence separate; never let one customer's exemption excuse another's flag.
 
-[REFERRAL CENTER - Master Deployment Plan](https://app.notion.com/p/3b4eb680c7fc80e5a420d694be4c4d4e)
+Unit under validation. A Referral Center implementation is one thing: the customer's Referral Center order-status sync worker (one workflow, or a dispatcher plus batch worker), the Missing Info worker the team has selected, and the TOM order data those two produce. You are not auditing the org's other workers. Read source for those two only. Everything upstream (intake, E&B, Qual) is judged through the data it left on the orders, not by pulling it.
 
-(the QA gate every ESE self-review uses), tightened by the two Referral Center
+0. Resolve the customer and confirm scope
+Identity. The customer's data may not be in this repo at all: org folders are untracked and many customers were never pulled. Resolve the org folder under orgs/ by folder name (not display name) if one exists, and take teamId from orgs/<org>/org.config.ts. If there is no folder, take the team id from the "Accessible teams" list in tennr whoami, say the org is not in the repo, and expect to fetch everything you read from prod. Read orgs/<org>/CONTEXT.md when it exists; otherwise the tracker row and Notion are your only context.
 
-WAC prompts (`wac-prompt-cron.md`, `wac-prompt-missing-info.md`, Linear
+Locate the sync worker. Look, in this order, until you have its assistant id: the org's workflows/ folder names (*referral-center*, *sync*, *cron*, *pipeline*, *wip*) and their learnings.md, if the org is in the repo; the customer's Referral Center Linear project or the copied BEN-1643 ticket; the rollout tracker notes; and only then a name match over tennr workflow list --team-id <team> --json (workflowName contains CRON, sync, stage, status, WIP, pipeline, or referral center). Record the assistant id(s) and stop looking at other workers. If nothing matches, that is itself the finding (see C3). When the worker is not on disk, or the repo copy is untrusted (it usually is), pull it yourself into a scratch folder rather than skipping the source checks:
 
-`BEN-1643`) and the Referral Pipeline best-practice spec. Where those sources
+Bash Copy
+mkdir -p /tmp/rc-validate/<org>
+tennr pull prod --team-id <team> --assistant-id <aid> --out /tmp/rc-validate/<org>/<slug>.ts --slug <slug> --yes
+Pull the dispatcher and its batch worker if it is a pair, and the Missing Info worker from C2. Do not write pulled files into orgs/ and do not pull the rest of the org; a validation run leaves the repo untouched.
 
-disagree, the Master Deployment Plan wins because it is what the approver
+Rollout status. Read the customer's row in the RC Waves rollout tracker via the Google Drive connector: RC Wave, Implementation Done?, Ben QC Done?, Pipeline Ready for Live Customer Demo, Responsible ESE, Other Notes. Record what the tracker claims so the flags can be read against it. A tracker row that says done never suppresses a flag.
 
-reviews against.
+Which surface. Referral Center (external referring-provider portal), Referral Pipeline (sales reps), and Patient Hub (ops) all read the same TOM orders. Sections 1 through 3 below validate that shared TOM layer and apply to every Referral Center rollout. Section 4 (segmentation) applies only if Referral Pipeline has been rolled out to this customer; check the tracker and CONTEXT.md, and if unclear say so and still run it as informational.
 
----
+Pre-gate. The Master Deployment Plan requires two things before the checklist even applies: the customer creates orders in the traditional sense, and Qualifications is live. Evidence, from data only:
 
-## The prompt
+production, non-archived rows in TENNR_CORE_OBJECT_ORDER for the team (query Q1 below) are non-trivial and recently updated;
 
-Copy everything between the rules into a session in `tennr-workflows`.
+MISSING_INFO or REJECTION_INFO rows for the team's orders whose ORIGIN_STEP_TYPE is a qualification step, or CONTEXT.md / the tracker recording Qual as live.
 
----
+If either is absent, raise a pre-gate flag saying the plan routes this customer to a planning meeting with Ben Howe, then still run the rest so the reviewer sees the whole picture.
 
-You are validating whether **{{CUSTOMER}}**'s Referral Center implementation is
+1. Configuration reads
+Use Sigma (MCP sigma, connection d5ee5fdf-9772-4383-ad6b-e41531cdf6be, Snowflake ESTUARY.POSTGRES.*, an Estuary replica of prod Postgres that lags by seconds; confirm with MAX(FLOW_PUBLISHED_AT)). Call begin_session first. Reference tables by element id in the FROM clause. If Sigma is unavailable, the same tables exist in the Postgres read replica as tennr_core_object.<name> through scripts/metabase/mb.py --db 3.
 
-actually complete. You read; you never write. You never start a live run,
+Table
 
-never push, never edit org configuration, and never commit. Every finding must
+Element id
 
-cite the query, command, run id, or file it came from. Output aggregates only;
+TENNR_CORE_OBJECT_ORDER
 
-never print a patient name, DOB, or address, even if a query returns one.
+f98b8d4d-8f48-4a04-9ccf-46e07d454aac
 
-**Unit under validation.** A Referral Center implementation is one thing: the
+TENNR_CORE_OBJECT_ORDER_STAGE
 
-customer's Referral Center order-status sync worker (one workflow, or a
+7538eccf-91c2-4f61-ad93-4960ccacb558
 
-dispatcher plus batch worker), the Missing Info worker the team has selected,
+TENNR_CORE_OBJECT_MISSING_INFO
 
-and the TOM order data those two produce. You are not auditing the org's other
+1b9c5fc5-33c8-482f-a4f6-0823445f4627
 
-workers. Read source for those two only. Everything upstream (intake, E&B,
+TENNR_CORE_OBJECT_REJECTION_INFO
 
-Qual) is judged through the data it left on the orders, not by pulling it.
+bf194d17-fbc1-4ad0-bed6-550996811a11
 
-### 0. Resolve the customer and confirm scope
+TENNR_CORE_OBJECT_ORDER_NOTE
 
-1. **Identity.** Resolve the org folder under `orgs/` by folder name (not display name). Take `teamId` from
-   `orgs/<org>/org.config.ts`; if there is no folder, take it from the "Accessible teams" list in `tennr whoami` and say
-   the org is not in the repo. Read `orgs/<org>/CONTEXT.md`.
-1. **Locate the sync worker.** Look, in this order, until you have its assistant id: the org's `workflows/` folder names
-   (`*referral-center*`, `*sync*`, `*cron*`, `*pipeline*`, `*wip*`) and their `learnings.md`; the customer's Referral
-   Center Linear project or the copied `BEN-1643` ticket; the rollout tracker notes; and only then a name match over
-   `tennr workflow list --team-id <team> --json` (`workflowName` contains CRON, sync, stage, status, WIP, pipeline, or
-   referral center). Record the assistant id(s) and stop looking at other workers. If nothing matches, that is itself
-   the finding (see C3).
-1. **Rollout status.** Read the customer's row in the
-   [RC Waves rollout tracker](https://docs.google.com/spreadsheets/d/1N30QvuCR9sdifI4uS_1LIWQENWc7M3KZfn7nOzsLW1E) via
-   the Google Drive connector: `RC Wave`, `Implementation Done?`, `Ben QC Done?`,
-   `Pipeline Ready for Live Customer Demo`, `Responsible ESE`, `Other Notes`. Record what the tracker _claims_ so the
-   verdict can be compared against it.
-1. **Which surface.** Referral Center (external referring-provider portal), Referral Pipeline (sales reps), and Patient
-   Hub (ops) all read the same TOM orders. Sections 1 through 3 below validate that shared TOM layer and apply to every
-   Referral Center rollout. Section 4 (segmentation) applies only if Referral Pipeline has been rolled out to this
-   customer; check the tracker and CONTEXT.md, and if unclear say so and still run it as informational.
-1. **Pre-gate.** The Master Deployment Plan requires two things before the checklist even applies: the customer creates
-   orders in the traditional sense, and Qualifications is live. Evidence, from data only:
-   - production, non-archived rows in `TENNR_CORE_OBJECT_ORDER` for the team (query Q1 below) are non-trivial and
-     recently updated;
-   - `MISSING_INFO` or `REJECTION_INFO` rows for the team's orders whose `ORIGIN_STEP_TYPE` is a qualification step, or
-     CONTEXT.md / the tracker recording Qual as live.
+9b2a3781-a4e4-4e31-9328-c3ded82438d2
 
-   If either fails, stop the checklist, grade `INCOMPLETE — pre-gate`, and say the plan routes this customer to a
-   planning meeting with Ben Howe instead.
+TENNR_CORE_OBJECT_DOCUMENT
 
-### 1. Configuration reads
+94837b89-8816-4d9a-bd3e-f452c5e1cef9
 
-Use Sigma (MCP `sigma`, connection `d5ee5fdf-9772-4383-ad6b-e41531cdf6be`,
+TENNR_CORE_OBJECT_TENNR_TEAM_TO_REFERRAL_WORKERS_JOIN
 
-Snowflake `ESTUARY.POSTGRES.*`, an Estuary replica of prod Postgres that lags
+501989c2-5136-4e4f-ae0b-a2870d167f0f
 
-by seconds; confirm with `MAX(FLOW_PUBLISHED_AT)`). Call `begin_session` first.
+TENNR_CORE_OBJECT_ORDER_ACCESS_GROUP
 
-Reference tables by element id in the `FROM` clause. If Sigma is unavailable,
+5ea2971a-0e69-4572-911d-0a13a8832f06
 
-the same tables exist in the Postgres read replica as
+TENNR_CORE_OBJECT_ACCESS_GROUP_TO_ORDER
 
-`tennr_core_object.<name>` through `scripts/metabase/mb.py --db 3`.
+5e542e85-fa09-4ec3-8638-e0ce4a3178f6
 
-| Table                                                             | Element id                             |
-| ----------------------------------------------------------------- | -------------------------------------- |
-| `TENNR_CORE_OBJECT_ORDER`                                         | `f98b8d4d-8f48-4a04-9ccf-46e07d454aac` |
-| `TENNR_CORE_OBJECT_ORDER_STAGE`                                   | `7538eccf-91c2-4f61-ad93-4960ccacb558` |
-| `TENNR_CORE_OBJECT_MISSING_INFO`                                  | `1b9c5fc5-33c8-482f-a4f6-0823445f4627` |
-| `TENNR_CORE_OBJECT_REJECTION_INFO`                                | `bf194d17-fbc1-4ad0-bed6-550996811a11` |
-| `TENNR_CORE_OBJECT_ORDER_NOTE`                                    | `9b2a3781-a4e4-4e31-9328-c3ded82438d2` |
-| `TENNR_CORE_OBJECT_DOCUMENT`                                      | `94837b89-8816-4d9a-bd3e-f452c5e1cef9` |
-| `TENNR_CORE_OBJECT_TENNR_TEAM_TO_REFERRAL_WORKERS_JOIN`           | `501989c2-5136-4e4f-ae0b-a2870d167f0f` |
-| `TENNR_CORE_OBJECT_ORDER_ACCESS_GROUP`                            | `5ea2971a-0e69-4572-911d-0a13a8832f06` |
-| `TENNR_CORE_OBJECT_ACCESS_GROUP_TO_ORDER`                         | `5e542e85-fa09-4ec3-8638-e0ce4a3178f6` |
-| `TENNR_CORE_OBJECT_ACCESS_GROUP_TO_MARKETING_REP`                 | `208c5d1b-6ac5-447e-a24d-ed020ea344d9` |
-| `TENNR_CORE_OBJECT_TEAM_FACILITY`                                 | `b1a8449c-952b-400c-a49e-85a039bd218a` |
-| `TENNR_CORE_OBJECT_TEAM_FACILITY_PRACTITIONER_MARKETING_REP_JOIN` | `4b1ec710-157c-444c-b1f5-9066d7591748` |
-| `PUBLIC_ORDER_RULE`                                               | `9adf00f9-3299-433f-8b54-ae4ca4148376` |
+TENNR_CORE_OBJECT_ACCESS_GROUP_TO_MARKETING_REP
 
-Always filter orders by `"RECEIVING_TEAM_ID" = '<teamId>'`,
+208c5d1b-6ac5-447e-a24d-ed020ea344d9
 
-`"ENVIRONMENT" = 'PRODUCTION'`, `"IS_ARCHIVED" = false` unless a check says
+TENNR_CORE_OBJECT_TEAM_FACILITY
 
-otherwise. Order `STATUS` is the closed enum `On Track | Missing Info |
+b1a8449c-952b-400c-a49e-85a039bd218a
 
-Rejected | Completed`; `STAGE` is org-configured free text resolved through
+TENNR_CORE_OBJECT_TEAM_FACILITY_PRACTITIONER_MARKETING_REP_JOIN
 
-`STAGE_ID`.
+4b1ec710-157c-444c-b1f5-9066d7591748
 
-**C1. Stage vocabulary** (`ORDER_STAGE` where `TEAM_ID` = team, all envs).
+PUBLIC_ORDER_RULE
 
-Required: a first stage that plays the "Referral Received" role
+9adf00f9-3299-433f-8b54-ae4ca4148376
 
-(`SEQUENCE_NUMBER` 1); a terminal Completed stage (the highest sequence, name
+Always filter orders by "RECEIVING_TEAM_ID" = '<teamId>', "ENVIRONMENT" = 'PRODUCTION', "IS_ARCHIVED" = false unless a check says otherwise. Order STATUS is the closed enum On Track | Missing Info | Rejected | Completed; STAGE is org-configured free text resolved through STAGE_ID.
 
-free); a penultimate Scheduled / Approved / Pending-Delivery stage **if** the
+C1. Stage vocabulary (ORDER_STAGE where TEAM_ID = team, all envs). Required: a first stage that plays the "Referral Received" role (SEQUENCE_NUMBER 1); a terminal Completed stage (the highest sequence, name free); a penultimate Scheduled / Approved / Pending-Delivery stage if the customer's process has a scheduled step (the ESE input worksheet or learnings.md says; if silent, report as "confirm with ESE" not as a miss). Stages must exist in PRODUCTION, and DEVELOPMENT and STAGING must carry the same names, because config does not promote across environments. Note the ORDER_STAGE table can hold several rows per env with the same name and distinct ids; that is real history, not replica duplication. Judge by distinct names.
 
-customer's process has a scheduled step (the ESE input worksheet or
+C2. Missing Info worker is set. TENNR_TEAM_TO_REFERRAL_WORKERS_JOIN where TEAM_ID = team. MISSING_INFO_WORKER_ID must be non-null. Then:
 
-`learnings.md` says; if silent, report as "confirm with ESE" not as a miss).
-
-Stages must exist in PRODUCTION, and DEVELOPMENT and STAGING must carry the
-
-same names, because config does not promote across environments. Note the
-
-`ORDER_STAGE` table can hold several rows per env with the same name and
-
-distinct ids; that is real history, not replica duplication. Judge by
-
-distinct names.
-
-**C2. Missing Info worker is set.** `TENNR_TEAM_TO_REFERRAL_WORKERS_JOIN`
-
-where `TEAM_ID` = team. `MISSING_INFO_WORKER_ID` must be non-null. Then:
-
-```bash
+Bash Copy
 tennr workflow settings get --team-id <team> --assistant-id <MISSING_INFO_WORKER_ID> --json
 tennr pull prod --team-id <team> --assistant-id <id> --out /tmp/rc-validate/<org>/missing-info-worker.ts --slug missing-info-worker --yes
-```
+The worker must have a live version and its pulled source must start from a w.missingInfo() root (the MISSING_INFO input step). A worker that starts from receiveEmail is the pre-2026 pattern; flag it. No row, a null id, an archived assistant, or a non-MISSING_INFO root all mean the "Provide" button cannot work; flag each as high priority.
 
-The worker must have a live version and its pulled source must start from a
+C3. The CRON sync worker (the assistant id(s) from step 0.2; the dispatcher and its batch worker if it is a pair):
 
-`w.missingInfo()` root (the `MISSING_INFO` input step). A worker that starts
-
-from `receiveEmail` is the pre-2026 pattern and fails this check. No row, a
-
-null id, an archived assistant, or a non-`MISSING_INFO` root all mean the
-
-"Provide" button cannot work, which is a blocker.
-
-**C3. The CRON sync worker** (the assistant id(s) from step 0.2; the
-
-dispatcher and its batch worker if it is a pair):
-
-```bash
+Bash Copy
 tennr workflow settings get --team-id <team> --assistant-id <aid> --json
 tennr pull prod --team-id <team> --assistant-id <aid> --out /tmp/rc-validate/<org>/<slug>.ts --slug <slug> --yes
 tennr run list --team-id <team> --assistant-id <aid> --environment PRODUCTION --limit 30
-```
+Flag, from settings: cron_enabled false in production; a cron_config that fires less than daily (the plan says twice daily, credential permitting); no live_version_id. Flag, from runs: no PRODUCTION run in a completed state in the last 3 days; any run of the pair in a FAILED state in the last 7 days (note whether a later success superseded it, and if a failed run has failureStepId: None, say it died at the run level, usually a timeout on an unbounded loop).
 
-Required, from settings: `cron_enabled: true`, a `cron_config` that fires at
+From the pulled prod source in /tmp/rc-validate/<org>/ (never the repo copy, which may be absent or ~1,000 lines behind), run these as grep-level heuristics. Each hit or miss is a pointer for the reviewer with file and line, not a ruling; you are not adjudicating the design.
 
-least daily (the plan says twice daily, credential permitting), and a
+Look for
 
-`live_version_id`. Required, from runs: at least one PRODUCTION run in the
+Flag when
 
-last 3 days in a completed state, and no run of the pair in a FAILED state in
+readTomEntity with ORDER_STATUS and its orderStatuses list
 
-the last 7 days that was not superseded by a success. Required, from the
+the list omits Missing Info, or includes Rejected, or there is no stage-based "already done" filter nearby (a gate on status alone re-processes every day)
 
-**pulled prod source** (never the repo copy; repo copies have been found ~1,000
+the terminal stage literal from C1
 
-lines behind):
+it appears in more than one place, or nowhere
 
-- sweeps only non-terminal orders, and the "already done" gate is on **stage**, not status (`readTomEntity`
-  `ORDER_STATUS` over `On Track`/`Missing Info` plus whichever statuses upstream workers write mid-stream, then a
-  terminal-stage filter);
-- the Completed write targets the terminal stage from C1 by exact string, held in one variable;
-- EHR status strings are normalized (dash folding, whitespace, case) before comparison, never compared literally;
-- an order absent from the EHR response is counted and left alone, never completed;
-- a Completed write also sets `dateFulfilled` and posts a human-readable order note with the ship/delivery/appointment
-  date; a Scheduled write posts the scheduled date;
-- Rejected writes are paired with a `REJECTION_INFO` create in the same `tryCatch`, before the status write;
-- EHR-specific fallbacks the plan names are handled: archived orders (WeInfuse), Completed WIPs missing from the Sales
-  Orders Worklist (Brightree), unmatched records have a documented disposition;
-- fan-out is bounded (batches, not per-order spawns) and `useDraftVersion` is not set on any spawn in the pushed
-  version.
+a dash/whitespace/case normalization step before EHR status comparison (replace, normalize, toLowerCase, –)
 
-A customer with no sync worker at all is a blocker unless CONTEXT.md or the
+absent, and the comparison is a literal === on a customer status string
 
-tracker records a deliberate exemption (consignment or stock-and-bill models
+handling of orders absent from the EHR response
 
-with no completion event; InHealth is the known example). Say which.
+a path that writes Completed when the lookup returns nothing
 
-**C4. Missing Info and Rejected writes upstream, judged from data.** Do not
+dateFulfilled and an ORDER_NOTE create next to the Completed write
 
-pull the intake, E&B, or Qual workers. The plan requires that Qual's
+either is missing
 
-"Missing Info" outcome creates a `MISSING_INFO` record on the order and sets
+every status write of Rejected
 
-status `Missing Info`, and that "Not Qualified" (and E&B out-of-network, if
+no REJECTION_INFO create in the same tryCatch before it
 
-E&B is live) creates a `REJECTION_INFO` with a reason and sets `Rejected`.
+spawnWorkflow
 
-Q2 and Q3 measure whether that is happening; `ORIGIN_STEP_TYPE` and
+no batching (a per-order spawn), or useDraftVersion: true on the pushed version
 
-`INTERACTION_ID` on those rows tell you which step and run wrote them
+an EHR-specific fallback the plan names
 
-(`tennr run get <interactionId>` names the worker) when you need to say who
+none present for that EHR (WeInfuse archived orders; Brightree Completed WIPs missing from the Sales Orders Worklist)
 
-owns a fix. Q1 catches the one upstream defect the sync cannot survive: a
+No sync worker at all is a high-priority flag unless CONTEXT.md or the tracker records a deliberate exemption (consignment or stock-and-bill models with no completion event; InHealth is the known example). Say which.
 
-status `Completed` written on a non-terminal stage (a qual-pass that writes
+C4. Missing Info and Rejected writes upstream, judged from data. Do not pull the intake, E&B, or Qual workers. The plan requires that Qual's "Missing Info" outcome creates a MISSING_INFO record on the order and sets status Missing Info, and that "Not Qualified" (and E&B out-of-network, if E&B is live) creates a REJECTION_INFO with a reason and sets Rejected. Q2 and Q3 measure whether that is happening; ORIGIN_STEP_TYPE and INTERACTION_ID on those rows tell you which step and run wrote them (tennr run get <interactionId> names the worker) when you need to say who owns a fix. Q1 catches the one upstream defect the sync cannot survive: a status Completed written on a non-terminal stage (a qual-pass that writes Completed hides the order from the sync forever). If Q1 shows it, name the writing worker from learnings.md or CONTEXT.md, or say the ESE must identify it; do not go read the org's workers to find it.
 
-Completed hides the order from the sync forever). If Q1 shows it, name the
+C5. Order types. PUBLIC_ORDER_RULE rows for the team should cover the service lines the customer sells. Report the share of production orders with ORDER_RULE_ID null and the count whose DISPLAY_NAME is the fallback No Product Specified.
 
-writing worker from `learnings.md` or CONTEXT.md, or say the ESE must identify
+2. Data hygiene queries
+Run each and report the numbers in a table. Any non-zero count in a flag condition is a flag; there are no percentage cutoffs. Section 5 only orders the flags.
 
-it; do not go read the org's workers to find it.
+Q1. Status × stage matrix.
 
-**C5. Order types.** `PUBLIC_ORDER_RULE` rows for the team should cover the
-
-service lines the customer sells. Report the share of production orders with
-
-`ORDER_RULE_ID` null and the count whose `DISPLAY_NAME` is the fallback
-
-`No Product Specified`.
-
-### 2. Data hygiene queries
-
-Run each; report the numbers in a table; apply the thresholds in section 5.
-
-**Q1. Status × stage matrix.**
-
-```sql
+SQL Copy
 SELECT s."STAGE", o."STATUS", COUNT(*) AS n, MIN(o."CREATED_AT") AS oldest, MAX(o."UPDATED_AT") AS last_update
 FROM "connection"."f98b8d4d-8f48-4a04-9ccf-46e07d454aac" o
 LEFT JOIN "connection"."7538eccf-91c2-4f61-ad93-4960ccacb558" s ON s."ID" = o."STAGE_ID"
 WHERE o."RECEIVING_TEAM_ID" = '<team>' AND o."ENVIRONMENT" = 'PRODUCTION' AND o."IS_ARCHIVED" = false
 GROUP BY 1,2 ORDER BY 3 DESC
-```
+Flag conditions: status Completed in any non-terminal stage; status Rejected in the terminal stage; any status outside the four-value enum; a stage name in the data that is not in C1's production list.
 
-Fail conditions: status `Completed` in any non-terminal stage; status
+Q2. Missing Info orders carry a legible open missing-info record.
 
-`Rejected` in the terminal stage; any status outside the four-value enum; a
-
-stage name in the data that is not in C1's production list.
-
-**Q2. Missing Info orders carry a legible open missing-info record.**
-
-```sql
+SQL Copy
 WITH o AS (SELECT * FROM "connection"."f98b8d4d-8f48-4a04-9ccf-46e07d454aac"
   WHERE "RECEIVING_TEAM_ID"='<team>' AND "ENVIRONMENT"='PRODUCTION' AND "IS_ARCHIVED"=false),
 mi AS (SELECT "ORDER_ID", COUNT(*) AS n_open,
@@ -274,178 +184,128 @@ SELECT CASE WHEN mi."ORDER_ID" IS NULL THEN 'Missing Info status, no open missin
             WHEN mi.n_opaque>0 THEN 'has row, message opaque or code-like'
             ELSE 'has legible open missing_info row' END AS bucket, COUNT(*) AS n
 FROM o LEFT JOIN mi ON mi."ORDER_ID"=o."ID" WHERE o."STATUS"='Missing Info' GROUP BY 1
-```
+Also sample 10 MESSAGE values (they are not PHI) and judge legibility as a referring provider would.
 
-Also sample 10 `MESSAGE` values (they are not PHI) and judge legibility as a
+Q3. Rejected orders carry a reason. Same shape against REJECTION_INFO."REASON". Any Rejected order with no row or a blank/code reason is a flag.
 
-referring provider would.
+Q4. Stale orders. Non-terminal status, grouped by stage and age bucket (<30d, 30-90d, 90-180d, >180d on CREATED_AT). The plan's example is an order from 7 months ago still On Track in the first stage. Report the count and share of open orders older than 90 days, and separately those in the first stage. Flag any non-zero 90-day count; note in the false-positive line that a large, uniform block of old first-stage orders may be a pre-Tennr backfill the customer never intended to sweep.
 
-**Q3. Rejected orders carry a reason.** Same shape against
+Q5. Completed orders are decorated. For status Completed, group by stage × (DATE_FULFILLED set?) × (has an undeleted ORDER_NOTE?). Completed orders in the terminal stage should have both when the EHR supplies a date; Completed orders outside the terminal stage feed Q1's failure.
 
-`REJECTION_INFO."REASON"`. Any Rejected order with no row or a blank/code
+Q6. Referrer present. Count orders where REFERRING_PRACTITIONER_ID, REFERRING_TEAM_PRACTITIONER_ID, and REFERRING_TEAM_FACILITY_ID are all null. The plan requires at least one referrer on every order unless the approver has accepted the exception in writing; look for that acceptance in learnings.md or CONTEXT.md and quote it in the false-positive line if found. Flag either way; the reviewer decides.
 
-reason fails.
+Q7. Document filenames. For documents on the team (DOCUMENT."TEAM_ID", production, not archived) created in the last 60 days, count filenames that are opaque: match ^[0-9a-f-]{24,}, ^untitled, \.tmp$, ^document\d*\.pdf$, ^scan, or a bare number. Sample 10 filenames for judgement.
 
-**Q4. Stale orders.** Non-terminal status, grouped by stage and age bucket
+Q8. Sync is moving orders. For orders whose status is Completed and whose stage is the terminal stage, report MAX(STATUS_UPDATED_AT) and the count updated in the last 7 days. Cross-check against the run list from C3: a CRON that runs daily but has moved nothing in a week is either correct (nothing shipped) or silently matching nothing; read the latest run's step results with tennr run logs <interactionId> and report what the reconcile step counted.
 
-(`<30d`, `30-90d`, `90-180d`, `>180d` on `CREATED_AT`). The plan's example is
+3. Environment parity
+From C1 and from ORDER_STAGE/ORDER_ACCESS_GROUP grouped by ENVIRONMENT: stage names, the Missing Info worker (the join table is not env-scoped; say so), and access groups must exist in PRODUCTION, not only DEVELOPMENT. Report any name present in DEV or STAGING but absent from PRODUCTION.
 
-an order from 7 months ago still On Track in the first stage. Report the count
+4. Segmentation (Referral Pipeline only)
+Determine the active order-view-restriction mode by evidence, since the team setting itself is not exposed:
 
-and share of open orders older than 90 days, and separately those in the first
+ORDER_ACCESS_GROUP rows for the team → custom rules (recommended). Require exactly one IS_DEFAULT = true group per environment, non-default groups with at least one rep in ACCESS_GROUP_TO_MARKETING_REP, and ACCESS_GROUP_TO_ORDER coverage for recent orders. The intake source must call routeOrderToGroup after order create/update.
 
-stage.
+rows in TEAM_FACILITY_PRACTITIONER_MARKETING_REP_JOIN joined to the team's facilities → the deprecated 1:1 mapping. Flag as "deprecated; do not extend" and flag separately if both modes are populated.
 
-**Q5. Completed orders are decorated.** For status `Completed`, group by
+neither → all users see all orders. Flag as "confirm this was chosen" unless CONTEXT.md records the choice; quote it if it does.
 
-stage × (`DATE_FULFILLED` set?) × (has an undeleted `ORDER_NOTE`?). Completed
+Also grep the pulled intake source for manageOrderAccessGroup and legacy salesRepName fields; if present and the customer is on custom rules driven by facility or ZIP, flag as legacy artifacts to remove.
 
-orders in the terminal stage should have both when the EHR supplies a date;
+5. Ordering the flags
+Every condition above that fires is a flag. Priority only decides the order the reviewer reads them in; it never decides whether something is raised or whether the customer passes.
 
-Completed orders outside the terminal stage feed Q1's failure.
+Look first: pre-gate absent; no sync worker without a recorded exemption; cron_enabled false or no completed production run in 3 days or a FAILED run in 7 days; Missing Info worker unset, archived, or not a MISSING_INFO root; terminal stage missing; Rejected without a reason; Missing Info orders with no open missing-info row; Completed on a non-terminal stage (data or source).
 
-**Q6. Referrer present.** Count orders where `REFERRING_PRACTITIONER_ID`,
+Look next: stale first-stage orders; orders without a referrer or order type; literal EHR string comparison; absence treated as completion; names in DEV or STAGING missing from PRODUCTION; mixed or unconfirmed segmentation; per-order spawns; useDraftVersion on a pushed spawn.
 
-`REFERRING_TEAM_PRACTITIONER_ID`, and `REFERRING_TEAM_FACILITY_ID` are all
+Look last: missing notes or dateFulfilled on terminal Completed orders; opaque filenames; No Product Specified display names; once-daily cadence; inert legacy routing artifacts.
 
-null. The plan requires at least one referrer on every order unless the
+Verdict per customer: No flags when nothing fired, otherwise Flag for review (N look-first, N look-next, N look-last). A check that could not be completed (no access, no data, tool error) is reported as unverified in the table and counts as a look-next flag, so the reviewer knows to cover it by hand.
 
-approver has accepted the exception in writing; look for that acceptance in
+6. Manual residue (always list, never grade)
+These cannot be validated from WAC tooling. List them in every report as the ESE's or approver's checklist:
 
-`learnings.md` or CONTEXT.md before grading.
+Click "Provide" on one Missing Info order in Development and confirm the Missing Info worker starts (needs a team API key under Settings → Developers; not readable from the CLI).
 
-**Q7. Document filenames.** For documents on the team
+Statsig feature flags for the team (Referral Center / Patient Pipeline).
 
-(`DOCUMENT."TEAM_ID"`, production, not archived) created in the last 60 days,
+Filter load time under real volume; mobile upload success/failure toast; CSV export DOB timezone.
 
-count filenames that are opaque: match `^[0-9a-f-]{24,}`, `^untitled`,
+Referral Center facility access: attempt a second-facility approval for a practitioner in a test environment and confirm it is blocked; confirm a "not my referral" path exists.
 
-`\.tmp$`, `^document\d*\.pdf$`, `^scan`, or a bare number. Sample 10 filenames
+Analytics definitions the customer asked for, and whether the underlying events are captured.
 
-for judgement.
+Contract alignment: Referral Pipeline enabled only if it is sold.
 
-**Q8. Sync is moving orders.** For orders whose status is `Completed` and
+7. Output format
+Per customer:
 
-whose stage is the terminal stage, report `MAX(STATUS_UPDATED_AT)` and the
+One line: {{CUSTOMER}} — No flags or {{CUSTOMER}} — Flag for review (N look-first, N look-next, N look-last), followed by what the tracker claimed.
 
-count updated in the last 7 days. Cross-check against the run list from C3: a
+Table Check | Result | Evidence, one row per C1–C5, Q1–Q8, parity, segmentation, with the query, command, or file:line that produced it. unverified rows say what blocked them.
 
-CRON that runs daily but has moved nothing in a week is either correct (nothing
+Flags, in section 5 order. Each flag is four lines:
 
-shipped) or silently matching nothing; read the latest run's step results with
+What: the condition and the number behind it.
 
-`tennr run logs <interactionId>` and report what the reconcile step counted.
+Look here: the workflow, setting, table, or file:line to open first.
 
-### 3. Environment parity
+Might be fine if: the most plausible reason a reviewer would dismiss it (a recorded exemption, a backfill, an EHR with no scheduled step, a customer decision already taken). Quote the source if one exists.
 
-From C1 and from `ORDER_STAGE`/`ORDER_ACCESS_GROUP` grouped by `ENVIRONMENT`:
+Owner if real: ESE in app, WAC change on a named draft branch, customer decision, or Ben Howe.
 
-stage names, the Missing Info worker (the join table is not env-scoped; say
+Manual residue from section 6.
 
-so), and access groups must exist in PRODUCTION, not only DEVELOPMENT. Report
+What I did not do and why (any check skipped for lack of access, data, or scope).
 
-any name present in DEV or STAGING but absent from PRODUCTION.
+In batch mode, end with one table Customer | Verdict | Look-first flags | Top item, sorted by look-first count descending, then look-next.
 
-### 4. Segmentation (Referral Pipeline only)
+Do not fix anything. Do not push. When a check needs a customer decision (Scheduled stage semantics, Not-Qualified → Rejected mapping, returned-device disposition), raise it as a flag with "customer decision" as the owner instead of guessing.
 
-Determine the active order-view-restriction mode by evidence, since the team
+Tooling this prompt depends on
+Layer
 
-setting itself is not exposed:
+Tool
 
-- `ORDER_ACCESS_GROUP` rows for the team → custom rules (recommended). Require exactly one `IS_DEFAULT = true` group per
-  environment, non-default groups with at least one rep in `ACCESS_GROUP_TO_MARKETING_REP`, and `ACCESS_GROUP_TO_ORDER`
-  coverage for recent orders. The intake source must call `routeOrderToGroup` after order create/update.
-- rows in `TEAM_FACILITY_PRACTITIONER_MARKETING_REP_JOIN` joined to the team's facilities → the deprecated 1:1 mapping.
-  Flag as "deprecated; do not extend" and report whether both modes are populated (mixed state is a defect).
-- neither → all users see all orders. Acceptable only if CONTEXT.md or the ESE confirms that was chosen.
+What it proves
 
-Also grep the pulled intake source for `manageOrderAccessGroup` and legacy
+TOM data and Referral Pipeline config
 
-`salesRepName` fields; if present and the customer is on custom rules driven by
+Sigma MCP over Snowflake ESTUARY.POSTGRES.TENNR_CORE_OBJECT_* (fallback scripts/metabase/mb.py, schema tennr_core_object)
 
-facility or ZIP, flag as legacy artifacts to remove.
+stage/status matrix, missing-info and rejection records, notes, dates, referrers, order types, documents, access groups, rep assignments, the team's Missing Info worker
 
-### 5. Grading
+Assistant settings
 
-Severity:
+tennr workflow settings get
 
-- **Blocker**: pre-gate fails; no CRON sync worker without a recorded exemption; `cron_enabled` false in production or
-  no successful production run in 7 days; Missing Info worker unset, archived, or not a `MISSING_INFO` root; terminal
-  stage missing; any Rejected order without a reason; more than 5% of Missing Info orders lacking an open missing-info
-  row; any `Completed` status written by a non-terminal stage in live source.
-- **Major**: `Completed` status on non-terminal stages in data (from an old version) not yet backfilled; more than 10%
-  of open orders older than 90 days in the first stage; more than 20% of orders lacking a referrer without a recorded
-  exception; more than 20% of orders lacking an order type; EHR string comparison done literally; absence treated as
-  completion; stage or group names present in DEV but not PROD; mixed segmentation modes; sync spawning per order
-  unbounded; `useDraftVersion` set on a pushed spawn.
-- **Minor**: notes or `dateFulfilled` missing on Completed terminal orders when the EHR has a date; opaque document
-  filenames above 10%; `No Product Specified` display names; CRON cadence once daily when the plan asked for twice;
-  legacy routing artifacts present but inert.
+CRON enabled, cadence, live version
 
-Verdict: `COMPLETE` only when there are zero blockers, zero majors, and the
+Workflow behaviour
 
-manual residue in section 6 is listed for the ESE. Anything else is
+tennr pull prod + grep-level heuristics on the source
 
-`INCOMPLETE` with the fix list. Never soften a blocker because the tracker says
+pointers into sweep logic, normalization, idempotency, entity pairing for the reviewer to confirm
 
-"Implementation Done"; the point of this validator is to compare the claim
+Runtime proof
 
-against evidence.
+tennr run list --environment PRODUCTION, tennr run logs; scripts/fetch-run-logs.py --only-outputs and scripts/run-tools/sweep.py --assistant <id> --env PRODUCTION when the CLI's log endpoint returns empty on a read-heavy sync run (both want a browser TENNR_BEARER; ask the user for it)
 
-### 6. Manual residue (always list, never grade)
+the CRON actually ran and what it counted
 
-These cannot be validated from WAC tooling. List them in every report as the
+Locating the worker
 
-ESE's or approver's checklist:
+repo folder names and learnings.md, then a name match on tennr workflow list
 
-- Click "Provide" on one Missing Info order in Development and confirm the Missing Info worker starts (needs a team API
-  key under Settings → Developers; not readable from the CLI).
-- Statsig feature flags for the team (Referral Center / Patient Pipeline).
-- Filter load time under real volume; mobile upload success/failure toast; CSV export DOB timezone.
-- Referral Center facility access: attempt a second-facility approval for a practitioner in a test environment and
-  confirm it is blocked; confirm a "not my referral" path exists.
-- Analytics definitions the customer asked for, and whether the underlying events are captured.
-- Contract alignment: Referral Pipeline enabled only if it is sold.
+the one sync worker to read; never an org-wide audit
 
-### 7. Output format
+Claims
 
-1. One line: `{{CUSTOMER}} — COMPLETE` or `{{CUSTOMER}} — INCOMPLETE (N blockers, N majors, N minors)`, followed by what
-   the tracker claimed.
-1. Table `Check | Result | Evidence`, one row per C1–C5, Q1–Q8, parity, segmentation, with the query or command that
-   produced it.
-1. **Fix list**, ordered blockers → majors → minors. Each item: what is wrong, the number behind it, which workflow or
-   setting owns it, the smallest change that fixes it, and who does it (ESE in app, WAC change on a named draft branch,
-   customer decision, or Ben Howe).
-1. **Manual residue** from section 6.
-1. **What I did not do and why** (any check skipped for lack of access, data, or scope).
+Google Sheet rollout tracker, Notion Master Deployment Plan, org CONTEXT.md and learnings.md
 
-Do not fix anything. Do not push. When a check needs a customer decision
+what the customer was promised and what the ESE recorded
 
-(Scheduled stage semantics, Not-Qualified → Rejected mapping, returned-device
+Not readable from any tool, so the prompt lists them as manual residue: the team-level order-view-restriction setting itself, the team API key, Statsig flags, UX/performance behaviour, Referral Center facility-access enforcement, and whether the "Provide" button end-to-end path works.
 
-disposition), say so instead of guessing.
-
----
-
-## Tooling this prompt depends on
-
-| Layer                                 | Tool                                                                                                                                                                                                                                                                                                    | What it proves                                                                                                                                                           |
-| ------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| TOM data and Referral Pipeline config | Sigma MCP over Snowflake `ESTUARY.POSTGRES.TENNR_CORE_OBJECT_*` (fallback `scripts/metabase/mb.py`, schema `tennr_core_object`)                                                                                                                                                                         | stage/status matrix, missing-info and rejection records, notes, dates, referrers, order types, documents, access groups, rep assignments, the team's Missing Info worker |
-| Assistant settings                    | `tennr workflow settings get`                                                                                                                                                                                                                                                                           | CRON enabled, cadence, live version                                                                                                                                      |
-| Workflow behaviour                    | `tennr pull prod` + reading the source                                                                                                                                                                                                                                                                  | sweep logic, normalization, idempotency, entity pairing                                                                                                                  |
-| Runtime proof                         | `tennr run list --environment PRODUCTION`, `tennr run logs`; `scripts/fetch-run-logs.py --only-outputs` and `scripts/run-tools/sweep.py --assistant <id> --env PRODUCTION` when the CLI's log endpoint returns empty on a read-heavy sync run (both want a browser `TENNR_BEARER`; ask the user for it) | the CRON actually ran and what it counted                                                                                                                                |
-| Locating the worker                   | repo folder names and `learnings.md`, then a name match on `tennr workflow list`                                                                                                                                                                                                                        | the one sync worker to read; never an org-wide audit                                                                                                                     |
-| Claims                                | Google Sheet rollout tracker, Notion Master Deployment Plan, org `CONTEXT.md` and `learnings.md`                                                                                                                                                                                                        | what the customer was promised and what the ESE recorded                                                                                                                 |
-
-Not readable from any tool, so the prompt lists them as manual residue: the
-
-team-level order-view-restriction setting itself, the team API key, Statsig
-
-flags, UX/performance behaviour, Referral Center facility-access enforcement,
-
-and whether the "Provide" button end-to-end path works.
-
-Per the tooling ladder, prefer the CLI, then `scripts/`, then Sigma/Metabase.
-
-`prod-data-mcp` is not required.
+Per the tooling ladder, prefer the CLI, then scripts/, then Sigma/Metabase. prod-data-mcp is not required.
